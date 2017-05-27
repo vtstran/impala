@@ -855,3 +855,26 @@ class TestScanTruncatedFiles(ImpalaTestSuite):
     result = self.execute_query("select count(*) from %s" % fq_tbl_name)
     assert(len(result.data) == 1)
     assert(result.data[0] == str(num_rows))
+
+class TestUncompressedText(ImpalaTestSuite):
+  @classmethod
+  def get_workload(cls):
+    return 'functional-query'
+
+  @classmethod
+  def add_test_dimensions(cls):
+    super(TestUncompressedText, cls).add_test_dimensions()
+    cls.ImpalaTestMatrix.add_constraint(lambda v:
+        v.get_value('table_format').file_format == 'text' and
+        v.get_value('table_format').compression_codec == 'none')
+  
+  # IMPALA-5315: Test support for casting date/time strings in unpadded
+  # format to timestamp
+  def test_cast_lazy_datetime_string(self, vector, unique_database):
+    self.client.execute(("""CREATE TABLE {0}.lazy_dt_str (dt_str STRING)""").format
+          (unique_database))
+    tbl_loc = get_fs_path("/test-warehouse/%s.db/%s" % (unique_database,
+          "lazy_dt_str"))
+    check_call(['hdfs', 'dfs', '-copyFromLocal', os.environ['IMPALA_HOME'] +
+          "/testdata/data/lazy_timestamp.csv", tbl_loc])
+    self.run_test_case('QueryTest/cast-lazy-datetime-string', vector, unique_database)
