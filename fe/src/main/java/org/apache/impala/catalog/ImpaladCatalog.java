@@ -102,7 +102,8 @@ public class ImpaladCatalog extends Catalog {
     defaultKuduMasterHosts_ = defaultKuduMasterHosts;
     // Ensure the contents of the CatalogObjectVersionQueue instance are cleared when a
     // new instance of ImpaladCatalog is created (see IMPALA-6486).
-    CatalogObjectVersionQueue.INSTANCE.clear();
+    // @vttran - for training
+    //    CatalogObjectVersionQueue.INSTANCE.clear();
   }
 
   /**
