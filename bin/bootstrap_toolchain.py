@@ -51,17 +51,19 @@ OS_MAPPING = {
   "centos6" : "ec2-package-centos-6",
   "centos5" : "ec2-package-centos-5",
   "centos7" : "ec2-package-centos-7",
+  "redhatenterpriseserver5" :  "ec2-package-centos-5",
+  "redhatenterpriseserver6" :  "ec2-package-centos-6",
+  "redhatenterpriseserver7" :  "ec2-package-centos-7",
   "debian6" : "ec2-package-debian-6",
   "debian7" : "ec2-package-debian-7",
   "debian8" : "ec2-package-debian-8",
   "suselinux11": "ec2-package-sles-11",
   "suselinux12": "ec2-package-sles-12",
-  "suse12.2": "ec2-package-sles-12",
-  "ubuntu12.04" : "ec2-package-ubuntu-12-04",
-  "ubuntu14.04" : "ec2-package-ubuntu-14-04",
-  "ubuntu15.04" : "ec2-package-ubuntu-14-04",
-  "ubuntu15.10" : "ec2-package-ubuntu-14-04",
-  "ubuntu16.04" : "ec2-package-ubuntu-16-04",
+  "suse12": "ec2-package-sles-12",
+  "ubuntu12" : "ec2-package-ubuntu-12-04",
+  "ubuntu14" : "ec2-package-ubuntu-14-04",
+  "ubuntu15" : "ec2-package-ubuntu-14-04",
+  "ubuntu16" : "ec2-package-ubuntu-16-04",
 }
 
 class Package(object):
@@ -106,7 +108,9 @@ def get_platform_release_label(release=None):
     if lsb_release_cache:
       release = lsb_release_cache
     else:
-      release = "".join(map(lambda x: x.lower(), sh.lsb_release("-irs").split()))
+      # Only need to check against the major release
+      release = "".join(map(lambda x: x.lower(), 
+          sh.lsb_release("-irs").split())).split('.')[0]
       lsb_release_cache = release
   for k, v in OS_MAPPING.iteritems():
     if re.search(k, release):
