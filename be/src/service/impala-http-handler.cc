@@ -203,6 +203,7 @@ void ImpalaHttpHandler::QueryProfileHandler(const Webserver::ArgumentMap& args,
     Document* document) {
   TUniqueId unique_id;
   Status parse_status = ParseIdFromArguments(args, &unique_id, "query_id");
+  lock_guard<mutex> l(server_->client_request_state_map_lock_);
   if (!parse_status.ok()) {
     Value error(parse_status.GetDetail().c_str(), document->GetAllocator());
     document->AddMember("error", error, document->GetAllocator());
