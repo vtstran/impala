@@ -49,6 +49,7 @@ class FaultInjectionUtil {
     RPC_EXCEPTION_SSL_SEND_TIMEDOUT,
     RPC_EXCEPTION_SSL_RECV_CLOSED_CONNECTION,
     RPC_EXCEPTION_SSL_RECV_TIMEDOUT,
+    RPC_EXCEPTION_SSL_RECV_TIMEDOUT2
   };
 
   /// Test util function that injects delays to specified RPC server handling function

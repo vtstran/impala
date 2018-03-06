@@ -95,6 +95,8 @@ void FaultInjectionUtil::InjectRpcException(bool is_send, int freq) {
           throw TTransportException(TTransportException::NOT_OPEN);
         case RPC_EXCEPTION_SSL_RECV_TIMEDOUT:
           throw TSSLException("SSL_read: Resource temporarily unavailable");
+	case RPC_EXCEPTION_SSL_RECV_TIMEDOUT2:
+	  throw TSSLException("SSL_read: Connection timed out");
         // fall through for the default case.
       }
     }

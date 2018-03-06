@@ -191,7 +191,9 @@ bool IsRecvTimeoutTException(const TTransportException& e) {
   return (e.getType() == TTransportException::TIMED_OUT &&
              strstr(e.what(), "EAGAIN (timed out)") != nullptr) ||
          (e.getType() == TTransportException::INTERNAL_ERROR &&
-             strstr(e.what(), "SSL_read: Resource temporarily unavailable") != nullptr);
+             strstr(e.what(), "SSL_read: Resource temporarily unavailable") != nullptr) ||
+	 (e.getType() == TTransportException::INTERNAL_ERROR &&
+	     strstr(e.what(), "SSL_read: Connection timed out") != nullptr);
 }
 
 bool IsConnResetTException(const TTransportException& e) {
