@@ -34,7 +34,6 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsAction;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.impala.catalog.ArrayType;
-import org.apache.impala.catalog.Catalog;
 import org.apache.impala.catalog.CatalogException;
 import org.apache.impala.catalog.Column;
 import org.apache.impala.catalog.ColumnStats;
@@ -366,7 +365,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
     // Cannot ALTER TABLE a nested collection.
     AnalysisError("alter table allcomplextypes.int_array_col " +
         "add columns (c1 string comment 'hi')",
-        createAnalyzer("functional"),
+        createAnalysisCtx("functional"),
         "ALTER TABLE not allowed on a nested collection: allcomplextypes.int_array_col");
     // Cannot ALTER TABLE produced by a data source.
     AnalysisError("alter table functional.alltypes_datasource " +
@@ -405,7 +404,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
         "ALTER TABLE not allowed on a view: functional.alltypes_view");
     // Cannot ALTER TABLE a nested collection.
     AnalysisError("alter table allcomplextypes.int_array_col drop column int_col",
-        createAnalyzer("functional"),
+        createAnalysisCtx("functional"),
         "ALTER TABLE not allowed on a nested collection: allcomplextypes.int_array_col");
     // Cannot ALTER TABLE produced by a data source.
     AnalysisError("alter table functional.alltypes_datasource drop column int_col",
@@ -457,7 +456,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
     // Cannot ALTER TABLE a nested collection.
     AnalysisError("alter table allcomplextypes.int_array_col " +
         "change column int_col int_col2 int",
-        createAnalyzer("functional"),
+        createAnalysisCtx("functional"),
         "ALTER TABLE not allowed on a nested collection: allcomplextypes.int_array_col");
     // Cannot ALTER TABLE produced by a data source.
     AnalysisError("alter table functional.alltypes_datasource " +
@@ -681,7 +680,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
         "ALTER TABLE not allowed on a view: functional.alltypes_view");
     // Cannot ALTER TABLE a nested collection.
     AnalysisError("alter table allcomplextypes.int_array_col set fileformat sequencefile",
-        createAnalyzer("functional"),
+        createAnalysisCtx("functional"),
         "ALTER TABLE not allowed on a nested collection: allcomplextypes.int_array_col");
     // Cannot ALTER TABLE produced by a data source.
     AnalysisError("alter table functional.alltypes_datasource set fileformat parquet",
@@ -721,7 +720,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
     AnalysisError("alter table functional.view_view set cached in 'testPool'",
         "ALTER TABLE not allowed on a view: functional.view_view");
     AnalysisError("alter table allcomplextypes.int_array_col set cached in 'testPool'",
-        createAnalyzer("functional"),
+        createAnalysisCtx("functional"),
         "ALTER TABLE not allowed on a nested collection: allcomplextypes.int_array_col");
 
     AnalysisError("alter table functional.alltypes set cached in 'badPool'",
@@ -841,7 +840,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
     AnalysisError(
         "alter table allcomplextypes.int_array_col " +
         "set column stats int_col ('numNulls'='2')",
-        createAnalyzer("functional"),
+        createAnalysisCtx("functional"),
         "ALTER TABLE not allowed on a nested collection: allcomplextypes.int_array_col");
     // Cannot set column stats of partition columns.
     AnalysisError(
@@ -1024,7 +1023,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
         "ALTER TABLE not allowed on a view: functional.alltypes_view");
     // Cannot ALTER TABLE a nested collection.
     AnalysisError("alter table allcomplextypes.int_array_col rename to new_alltypes",
-        createAnalyzer("functional"),
+        createAnalysisCtx("functional"),
         "Database does not exist: allcomplextypes");
 
     // It should be okay to rename an HBase table.
@@ -1046,7 +1045,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
     AnalysisError("alter table functional.view_view recover partitions",
         "ALTER TABLE not allowed on a view: functional.view_view");
     AnalysisError("alter table allcomplextypes.int_array_col recover partitions",
-        createAnalyzer("functional"),
+        createAnalysisCtx("functional"),
         "ALTER TABLE not allowed on a nested collection: allcomplextypes.int_array_col");
     AnalysisError("alter table functional_hbase.alltypes recover partitions",
         "ALTER TABLE RECOVER PARTITIONS must target an HDFS table: " +
@@ -1176,21 +1175,21 @@ public class AnalyzeDDLTest extends FrontendTestBase {
   }
 
   ComputeStatsStmt checkComputeStatsStmt(String stmt) throws AnalysisException {
-    return checkComputeStatsStmt(stmt, createAnalyzer(Catalog.DEFAULT_DB));
+    return checkComputeStatsStmt(stmt, createAnalysisCtx());
   }
 
-  ComputeStatsStmt checkComputeStatsStmt(String stmt, Analyzer analyzer)
+  ComputeStatsStmt checkComputeStatsStmt(String stmt, AnalysisContext ctx)
       throws AnalysisException {
-    return checkComputeStatsStmt(stmt, analyzer, null);
+    return checkComputeStatsStmt(stmt, ctx, null);
   }
 
   /**
    * Analyzes 'stmt' and checks that the table-level and column-level SQL that is used
    * to compute the stats is valid. Returns the analyzed statement.
    */
-  ComputeStatsStmt checkComputeStatsStmt(String stmt, Analyzer analyzer,
+  ComputeStatsStmt checkComputeStatsStmt(String stmt, AnalysisContext ctx,
       String expectedWarning) throws AnalysisException {
-    ParseNode parseNode = AnalyzesOk(stmt, analyzer, expectedWarning);
+    ParseNode parseNode = AnalyzesOk(stmt, ctx, expectedWarning);
     assertTrue(parseNode instanceof ComputeStatsStmt);
     ComputeStatsStmt parsedStmt = (ComputeStatsStmt)parseNode;
     AnalyzesOk(parsedStmt.getTblStatsQuery());
@@ -1349,7 +1348,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
           queryOpts.compute_stats_min_sample_size == 1024 * 1024 * 1024);
       ComputeStatsStmt noSamplingStmt = checkComputeStatsStmt(
           "compute stats functional.alltypes tablesample system (10) repeatable(1)",
-          createAnalyzer(queryOpts),
+          createAnalysisCtx(queryOpts),
           "Ignoring TABLESAMPLE because the effective sampling rate is 100%");
       Assert.assertTrue(noSamplingStmt.getEffectiveSamplingPerc() == 1.0);
       String tblStatsQuery = noSamplingStmt.getTblStatsQuery().toUpperCase();
@@ -1362,10 +1361,10 @@ public class AnalyzeDDLTest extends FrontendTestBase {
       // No minimum sample bytes.
       queryOpts.setCompute_stats_min_sample_size(0);
       checkComputeStatsStmt("compute stats functional.alltypes tablesample system (10)",
-          createAnalyzer(queryOpts));
+          createAnalysisCtx(queryOpts));
       checkComputeStatsStmt(
           "compute stats functional.alltypes tablesample system (55) repeatable(1)",
-          createAnalyzer(queryOpts));
+          createAnalysisCtx(queryOpts));
 
       // Sample is adjusted based on the minimum sample bytes.
       // Assumes that functional.alltypes has 24 files of roughly 20KB each.
@@ -1374,7 +1373,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
       queryOpts.setCompute_stats_min_sample_size(0);
       ComputeStatsStmt baselineStmt = checkComputeStatsStmt(
           "compute stats functional.alltypes tablesample system (1) repeatable(1)",
-          createAnalyzer(queryOpts));
+          createAnalysisCtx(queryOpts));
       // Approximate validation of effective sampling rate.
       Assert.assertTrue(baselineStmt.getEffectiveSamplingPerc() > 0.03);
       Assert.assertTrue(baselineStmt.getEffectiveSamplingPerc() < 0.05);
@@ -1383,7 +1382,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
       queryOpts.setCompute_stats_min_sample_size(100 * 1024);
       ComputeStatsStmt adjustedStmt = checkComputeStatsStmt(
           "compute stats functional.alltypes tablesample system (1) repeatable(1)",
-          createAnalyzer(queryOpts));
+          createAnalysisCtx(queryOpts));
       // Approximate validation to avoid flakiness due to sampling and file size
       // changes. Expect a sample between 4 and 6 of the 24 total files.
       Assert.assertTrue(adjustedStmt.getEffectiveSamplingPerc() >= 4.0 / 24);
@@ -1793,6 +1792,10 @@ public class AnalyzeDDLTest extends FrontendTestBase {
         "left join functional.alltypes b " +
         "on b.timestamp_col between a.timestamp_col and a.timestamp_col) " +
         "select a.timestamp_col, a.year from tmp a");
+    // CTAS into Kudu with decimal type
+    AnalyzesOk("create table t primary key (id) partition by hash partitions 3" +
+        " stored as kudu as select c1 as id from functional.decimal_tiny");
+
     // CTAS in an external Kudu table
     AnalysisError("create external table t stored as kudu " +
         "tblproperties('kudu.table_name'='t') as select id, int_col from " +
@@ -1806,9 +1809,6 @@ public class AnalyzeDDLTest extends FrontendTestBase {
     AnalysisError("create table t primary key (vc) partition by hash partitions 3" +
         " stored as kudu as select vc from functional.chars_tiny",
         "Cannot create table 't': Type VARCHAR(32) is not supported in Kudu");
-    AnalysisError("create table t primary key (id) partition by hash partitions 3" +
-        " stored as kudu as select c1 as id from functional.decimal_tiny",
-        "Cannot create table 't': Type DECIMAL(10,4) is not supported in Kudu");
     AnalysisError("create table t primary key (id) partition by hash partitions 3" +
         " stored as kudu as select id, s from functional.complextypes_fileformat",
         "Expr 's' in select list returns a complex type 'STRUCT<f1:STRING,f2:INT>'.\n" +
@@ -1828,6 +1828,34 @@ public class AnalyzeDDLTest extends FrontendTestBase {
         " stored as kudu as SELECT INT_COL, SMALLINT_COL, ID, BIGINT_COL," +
         " DATE_STRING_COL, STRING_COL, TIMESTAMP_COL, YEAR, MONTH FROM " +
         " functional.alltypes");
+  }
+
+  @Test
+  public void TestCreateTableAsSelectWithHints() throws AnalysisException {
+    // Test if CTAS hints are analyzed correctly and that conflicting hints
+    // result in error.
+    // The tests here are minimal, because other tests already cover this logic:
+    // - ParserTests#TestPlanHints tests if hints are set correctly during parsing.
+    // - AnalyzeStmtsTest#TestInsertHints tests the analyzes of insert hints, which
+    //   is the same as the analyzes of CTAS hints.
+    for (String[] hintStyle: hintStyles_) {
+      String prefix = hintStyle[0];
+      String suffix = hintStyle[1];
+      // Test plan hints for partitioned Hdfs tables.
+      AnalyzesOk(String.format("create %sshuffle%s table t " +
+          "partitioned by (year, month) as select * from functional.alltypes",
+          prefix, suffix));
+      // Warn on unrecognized hints.
+      AnalyzesOk(String.format("create %sbadhint%s table t " +
+          "partitioned by (year, month) as select * from functional.alltypes",
+          prefix, suffix),
+          "INSERT hint not recognized: badhint");
+      // Conflicting plan hints.
+      AnalysisError(String.format("create %sshuffle,noshuffle%s table t " +
+          "partitioned by (year, month) as " +
+          "select * from functional.alltypes", prefix, suffix),
+          "Conflicting INSERT hints: shuffle and noshuffle");
+    }
   }
 
   @Test
@@ -2185,6 +2213,9 @@ public class AnalyzeDDLTest extends FrontendTestBase {
     AnalyzesOk("alter table functional_kudu.testtbl add columns (a1 tinyint null, a2 " +
         "smallint null, a3 int null, a4 bigint null, a5 string null, a6 float null, " +
         "a7 double null, a8 boolean null comment 'boolean')");
+    // Decimal types
+    AnalyzesOk("alter table functional_kudu.testtbl add columns (d1 decimal null, d2 " +
+        "decimal(9, 2) null, d3 decimal(15, 15) null, d4 decimal(38, 0) null)");
     // Complex types
     AnalysisError("alter table functional_kudu.testtbl add columns ( "+
         "a struct<f1:int>)", "Kudu tables do not support complex types: " +
@@ -2198,6 +2229,8 @@ public class AnalyzeDDLTest extends FrontendTestBase {
         "default 10)");
     AnalyzesOk("alter table functional_kudu.testtbl add columns (a1 int null " +
         "default 10)");
+    AnalyzesOk("alter table functional_kudu.testtbl add columns (d1 decimal(9, 2) null " +
+        "default 99.99)");
     // Other Kudu column options
     AnalyzesOk("alter table functional_kudu.testtbl add columns (a int encoding rle)");
     AnalyzesOk("alter table functional_kudu.testtbl add columns (a int compression lz4)");
@@ -2450,8 +2483,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
         "in Kudu tables.");
 
     // Test unsupported Kudu types
-    List<String> unsupportedTypes = Lists.newArrayList(
-        "DECIMAL(9,0)", "VARCHAR(20)", "CHAR(20)",
+    List<String> unsupportedTypes = Lists.newArrayList("VARCHAR(20)", "CHAR(20)",
         "STRUCT<f1:INT,f2:STRING>", "ARRAY<INT>", "MAP<STRING,STRING>");
     for (String t: unsupportedTypes) {
       String expectedError = String.format(
@@ -2502,7 +2534,8 @@ public class AnalyzeDDLTest extends FrontendTestBase {
     AnalyzesOk("create table tab (x int primary key, i1 tinyint default null, " +
         "i2 smallint default null, i3 int default null, i4 bigint default null, " +
         "vals string default null, valf float default null, vald double default null, " +
-        "valb boolean default null) partition by hash (x) partitions 3 stored as kudu");
+        "valb boolean default null, valdec decimal(10, 5) default null) " +
+        "partition by hash (x) partitions 3 stored as kudu");
     // Use NULL as a default value on a non-nullable column
     AnalysisError("create table tab (x int primary key, y int not null default null) " +
         "partition by hash (x) partitions 3 stored as kudu", "Default value of NULL " +
@@ -2534,6 +2567,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
         "i3 int default 100, i4 bigint default 1000, vals string default 'test', " +
         "valf float default cast(1.2 as float), vald double default " +
         "cast(3.1452 as double), valb boolean default true, " +
+        "valdec decimal(10, 5) default 3.14159, " +
         "primary key (i1, i2, i3, i4, vals)) partition by hash (i1) partitions 3 " +
         "stored as kudu");
     AnalyzesOk("create table tab (i int primary key default 1+1+1) " +
@@ -3592,7 +3626,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
     addTestTable("create table ambig.ambig (ambig struct<ambig:array<int>>)");
     // Single element path can only be resolved as <table>.
     DescribeTableStmt describe = (DescribeTableStmt)AnalyzesOk("describe ambig",
-        createAnalyzer("ambig"));
+        createAnalysisCtx("ambig"));
     TDescribeTableParams tdesc = (TDescribeTableParams) describe.toThrift();
     Assert.assertTrue(tdesc.isSetTable_name());
     Assert.assertEquals("ambig", tdesc.table_name.getDb_name());
@@ -3600,14 +3634,14 @@ public class AnalyzeDDLTest extends FrontendTestBase {
     Assert.assertFalse(tdesc.isSetResult_struct());
 
     // Path could be resolved as either <db>.<table> or <table>.<complex field>
-    AnalysisError("describe ambig.ambig", createAnalyzer("ambig"),
+    AnalysisError("describe ambig.ambig", createAnalysisCtx("ambig"),
         "Path is ambiguous: 'ambig.ambig'");
     // Path could be resolved as either <db>.<table>.<field> or <table>.<field>.<field>
-    AnalysisError("describe ambig.ambig.ambig", createAnalyzer("ambig"),
+    AnalysisError("describe ambig.ambig.ambig", createAnalysisCtx("ambig"),
         "Path is ambiguous: 'ambig.ambig.ambig'");
     // 4 element path can only be resolved to nested array.
     describe = (DescribeTableStmt) AnalyzesOk(
-        "describe ambig.ambig.ambig.ambig", createAnalyzer("ambig"));
+        "describe ambig.ambig.ambig.ambig", createAnalysisCtx("ambig"));
     tdesc = (TDescribeTableParams) describe.toThrift();
     Type expectedType =
         org.apache.impala.analysis.Path.getTypeAsStruct(new ArrayType(Type.INT));
@@ -3660,7 +3694,7 @@ public class AnalyzeDDLTest extends FrontendTestBase {
           partition),
           "SHOW FILES not applicable to a non hdfs table: functional.alltypes_view");
       AnalysisError(String.format("show files in allcomplextypes.int_array_col %s",
-          partition), createAnalyzer("functional"),
+          partition), createAnalysisCtx("functional"),
           "SHOW FILES not applicable to a non hdfs table: allcomplextypes.int_array_col");
     }
 

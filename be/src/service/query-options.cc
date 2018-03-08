@@ -30,6 +30,8 @@
 
 #include "common/names.h"
 
+DECLARE_int64(min_buffer_size);
+
 using boost::algorithm::iequals;
 using boost::algorithm::is_any_of;
 using boost::algorithm::token_compress_on;
@@ -293,9 +295,18 @@ Status impala::SetQueryOption(const string& key, const string& value,
         query_options->__set_disable_outermost_topn(
             iequals(value, "true") || iequals(value, "1"));
         break;
-      case TImpalaQueryOptions::QUERY_TIMEOUT_S:
-        query_options->__set_query_timeout_s(atoi(value.c_str()));
+      case TImpalaQueryOptions::QUERY_TIMEOUT_S: {
+        StringParser::ParseResult result;
+        const int32_t timeout_s =
+            StringParser::StringToInt<int32_t>(value.c_str(), value.length(), &result);
+        if (result != StringParser::PARSE_SUCCESS || timeout_s < 0) {
+          return Status(
+              Substitute("Invalid query timeout: '$0'. "
+                         "Only non-negative numbers are allowed.", value));
+        }
+        query_options->__set_query_timeout_s(timeout_s);
         break;
+      }
       case TImpalaQueryOptions::BUFFER_POOL_LIMIT: {
         int64_t mem;
         RETURN_IF_ERROR(ParseMemValue(value, "buffer pool limit", &mem));
@@ -363,6 +374,16 @@ Status impala::SetQueryOption(const string& key, const string& value,
                       static_cast<TImpalaQueryOptions::type>(option)),
                   RuntimeFilterBank::MIN_BLOOM_FILTER_SIZE,
                   RuntimeFilterBank::MAX_BLOOM_FILTER_SIZE));
+        }
+        if (option == TImpalaQueryOptions::RUNTIME_FILTER_MAX_SIZE
+            && size < FLAGS_min_buffer_size
+            // last condition is to unblock the highly improbable case where the
+            // min_buffer_size is greater than RuntimeFilterBank::MAX_BLOOM_FILTER_SIZE.
+            && FLAGS_min_buffer_size <= RuntimeFilterBank::MAX_BLOOM_FILTER_SIZE) {
+          return Status(Substitute("$0 should not be less than $1 which is the minimum "
+              "buffer size that can be allocated by the buffer pool",
+              PrintTImpalaQueryOptions(static_cast<TImpalaQueryOptions::type>(option)),
+              FLAGS_min_buffer_size));
         }
         if (option == TImpalaQueryOptions::RUNTIME_BLOOM_FILTER_SIZE) {
           query_options->__set_runtime_bloom_filter_size(size);
@@ -584,7 +605,7 @@ Status impala::SetQueryOption(const string& key, const string& value,
         if (result != StringParser::PARSE_SUCCESS || requested_timeout < 0) {
           return Status(
               Substitute("Invalid idle session timeout: '$0'. "
-                         "Only positive numbers are allowed.", value));
+                         "Only non-negative numbers are allowed.", value));
         }
         query_options->__set_idle_session_timeout(requested_timeout);
         break;
@@ -597,6 +618,18 @@ Status impala::SetQueryOption(const string& key, const string& value,
               Substitute("Min sample size must be greater or equal to zero: $0", value));
         }
         query_options->__set_compute_stats_min_sample_size(min_sample_size);
+        break;
+      }
+      case TImpalaQueryOptions::EXEC_TIME_LIMIT_S: {
+        StringParser::ParseResult result;
+        const int32_t time_limit =
+            StringParser::StringToInt<int32_t>(value.c_str(), value.length(), &result);
+        if (result != StringParser::PARSE_SUCCESS || time_limit < 0) {
+          return Status(
+              Substitute("Invalid query time limit: '$0'. "
+                         "Only non-negative numbers are allowed.", value));
+        }
+        query_options->__set_exec_time_limit_s(time_limit);
         break;
       }
       default:

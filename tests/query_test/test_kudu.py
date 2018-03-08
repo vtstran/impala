@@ -357,7 +357,7 @@ class TestKuduOperations(KuduTestSuite):
       pytest.skip("Only runs in exhaustive to reduce core time.")
     table_name = "%s.storage_attrs" % unique_database
     types = ['boolean', 'tinyint', 'smallint', 'int', 'bigint', 'float', 'double', \
-        'string', 'timestamp']
+        'string', 'timestamp', 'decimal']
 
     create_query = "create table %s (id int primary key" % table_name
     for t in types:
@@ -378,10 +378,10 @@ class TestKuduOperations(KuduTestSuite):
           except Exception as err:
             assert "encoding %s not supported for type" % e in str(err)
         cursor.execute("""insert into %s values (%s, true, 0, 0, 0, 0, 0, 0, '0',
-            cast('2009-01-01' as timestamp))""" % (table_name, i))
+            cast('2009-01-01' as timestamp), cast(0 as decimal))""" % (table_name, i))
         cursor.execute("select * from %s where id = %s" % (table_name, i))
         assert cursor.fetchall() == \
-            [(i, True, 0, 0, 0, 0, 0.0, 0.0, '0', datetime(2009, 1, 1, 0, 0))]
+            [(i, True, 0, 0, 0, 0, 0.0, 0.0, '0', datetime(2009, 1, 1, 0, 0), 0)]
         i += 1
     cursor.execute("select count(*) from %s" % table_name)
     print cursor.fetchall() == [(i, )]
@@ -485,6 +485,7 @@ class TestCreateExternalTable(KuduTestSuite):
 
   def test_col_types(self, cursor, kudu_client):
     """Check that a table can be created using all available column types."""
+    # TODO: Add DECIMAL when the Kudu python client supports decimal
     kudu_types = [STRING, BOOL, DOUBLE, FLOAT, INT16, INT32, INT64, INT8]
     with self.temp_kudu_table(kudu_client, kudu_types) as kudu_table:
       impala_table_name = self.get_kudu_table_base_name(kudu_table.name)

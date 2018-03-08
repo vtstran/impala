@@ -43,6 +43,7 @@ class BufferPool;
 class CallableThreadPool;
 class DataStreamMgrBase;
 class DataStreamMgr;
+class DataStreamService;
 class QueryExecMgr;
 class Frontend;
 class HBaseTableFactory;
@@ -82,7 +83,7 @@ class ExecEnv {
       int subscriber_port, int webserver_port, const std::string& statestore_host,
       int statestore_port);
 
-  /// Returns the first created exec env instance. In a normal impalad, this is
+  /// Returns the most recently created exec env instance. In a normal impalad, this is
   /// the only instance. In test setups with multiple ExecEnv's per process,
   /// we return the most recently created instance.
   static ExecEnv* GetInstance() { return exec_env_; }
@@ -122,6 +123,7 @@ class ExecEnv {
   io::DiskIoMgr* disk_io_mgr() { return disk_io_mgr_.get(); }
   Webserver* webserver() { return webserver_.get(); }
   MetricGroup* metrics() { return metrics_.get(); }
+  MetricGroup* rpc_metrics() { return rpc_metrics_; }
   MemTracker* process_mem_tracker() { return mem_tracker_.get(); }
   ThreadResourceMgr* thread_mgr() { return thread_mgr_.get(); }
   HdfsOpThreadPool* hdfs_op_thread_pool() { return hdfs_op_thread_pool_.get(); }
@@ -133,6 +135,7 @@ class ExecEnv {
   CallableThreadPool* rpc_pool() { return async_rpc_pool_.get(); }
   QueryExecMgr* query_exec_mgr() { return query_exec_mgr_.get(); }
   RpcMgr* rpc_mgr() const { return rpc_mgr_.get(); }
+  DataStreamService* data_svc() const { return data_svc_.get(); }
   PoolMemTrackerRegistry* pool_mem_trackers() { return pool_mem_trackers_.get(); }
   ReservationTracker* buffer_reservation() { return buffer_reservation_.get(); }
   BufferPool* buffer_pool() { return buffer_pool_.get(); }
@@ -198,6 +201,7 @@ class ExecEnv {
   boost::scoped_ptr<CallableThreadPool> async_rpc_pool_;
   boost::scoped_ptr<QueryExecMgr> query_exec_mgr_;
   boost::scoped_ptr<RpcMgr> rpc_mgr_;
+  boost::scoped_ptr<DataStreamService> data_svc_;
 
   /// Query-wide buffer pool and the root reservation tracker for the pool. The
   /// reservation limit is equal to the maximum capacity of the pool. Created in
@@ -207,11 +211,13 @@ class ExecEnv {
 
   /// Not owned by this class
   ImpalaServer* impala_server_ = nullptr;
+  MetricGroup* rpc_metrics_ = nullptr;
 
   bool enable_webserver_;
 
  private:
   friend class TestEnv;
+  friend class DataStreamTest;
 
   static ExecEnv* exec_env_;
   bool is_fe_tests_ = false;

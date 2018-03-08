@@ -3759,6 +3759,7 @@ TEST_F(ExprTest, StringFunctions) {
   TestIsNull("strleft(NULL, 3)", TYPE_STRING);
   TestIsNull("strleft('abcdefg', NULL)", TYPE_STRING);
   TestIsNull("strleft(NULL, NULL)", TYPE_STRING);
+  TestStringValue("left('foobar', 3)", "foo");
   TestStringValue("strright('abcdefg', 0)", "");
   TestStringValue("strright('abcdefg', 3)", "efg");
   TestStringValue("strright('abcdefg', cast(10 as bigint))", "abcdefg");
@@ -3767,6 +3768,7 @@ TEST_F(ExprTest, StringFunctions) {
   TestIsNull("strright(NULL, 3)", TYPE_STRING);
   TestIsNull("strright('abcdefg', NULL)", TYPE_STRING);
   TestIsNull("strright(NULL, NULL)", TYPE_STRING);
+  TestStringValue("right('foobar', 3)", "bar");
 
   TestStringValue("translate('', '', '')", "");
   TestStringValue("translate('abcd', '', '')", "abcd");
@@ -5933,11 +5935,13 @@ TEST_F(ExprTest, TimestampFunctions) {
   TestValue("cast('2011-12-22 09:10:11.000000' as timestamp) = \
       cast('2011-12-22 09:10:11' as timestamp)", TYPE_BOOLEAN, true);
   TestValue("year(cast('2011-12-22 09:10:11.000000' as timestamp))", TYPE_INT, 2011);
+  TestValue("quarter(cast('2011-12-22 09:10:11.000000' as timestamp))", TYPE_INT, 4);
   TestValue("month(cast('2011-12-22 09:10:11.000000' as timestamp))", TYPE_INT, 12);
   TestValue("dayofmonth(cast('2011-12-22 09:10:11.000000' as timestamp))", TYPE_INT, 22);
   TestValue("day(cast('2011-12-22 09:10:11.000000' as timestamp))", TYPE_INT, 22);
   TestValue("dayofyear(cast('2011-12-22 09:10:11.000000' as timestamp))", TYPE_INT, 356);
   TestValue("weekofyear(cast('2011-12-22 09:10:11.000000' as timestamp))", TYPE_INT, 51);
+  TestValue("week(cast('2011-12-22 09:10:11.000000' as timestamp))", TYPE_INT, 51);
   TestValue("dayofweek(cast('2011-12-18 09:10:11.000000' as timestamp))", TYPE_INT, 1);
   TestValue("dayofweek(cast('2011-12-22 09:10:11.000000' as timestamp))", TYPE_INT, 5);
   TestValue("dayofweek(cast('2011-12-24 09:10:11.000000' as timestamp))", TYPE_INT, 7);
@@ -5949,11 +5953,13 @@ TEST_F(ExprTest, TimestampFunctions) {
   TestValue("millisecond(cast('2011-12-22 09:10:11' as timestamp))", TYPE_INT, 0);
   TestValue("millisecond(cast('2011-12-22' as timestamp))", TYPE_INT, 0);
   TestValue("year(cast('2011-12-22' as timestamp))", TYPE_INT, 2011);
+  TestValue("quarter(cast('2011-12-22' as timestamp))", TYPE_INT, 4);
   TestValue("month(cast('2011-12-22' as timestamp))", TYPE_INT, 12);
   TestValue("dayofmonth(cast('2011-12-22' as timestamp))", TYPE_INT, 22);
   TestValue("day(cast('2011-12-22' as timestamp))", TYPE_INT, 22);
   TestValue("dayofyear(cast('2011-12-22' as timestamp))", TYPE_INT, 356);
   TestValue("weekofyear(cast('2011-12-22' as timestamp))", TYPE_INT, 51);
+  TestValue("week(cast('2011-12-22' as timestamp))", TYPE_INT, 51);
   TestValue("dayofweek(cast('2011-12-18' as timestamp))", TYPE_INT, 1);
   TestValue("dayofweek(cast('2011-12-22' as timestamp))", TYPE_INT, 5);
   TestValue("dayofweek(cast('2011-12-24' as timestamp))", TYPE_INT, 7);
@@ -6011,22 +6017,26 @@ TEST_F(ExprTest, TimestampFunctions) {
   TestIsNull("cast('2000-12-31 24:59:59' as timestamp)", TYPE_TIMESTAMP);
 
   TestIsNull("year(cast('09:10:11.000000' as timestamp))", TYPE_INT);
+  TestIsNull("quarter(cast('09:10:11.000000' as timestamp))", TYPE_INT);
   TestIsNull("month(cast('09:10:11.000000' as timestamp))", TYPE_INT);
   TestIsNull("dayofmonth(cast('09:10:11.000000' as timestamp))", TYPE_INT);
   TestIsNull("day(cast('09:10:11.000000' as timestamp))", TYPE_INT);
   TestIsNull("dayofyear(cast('09:10:11.000000' as timestamp))", TYPE_INT);
   TestIsNull("dayofweek(cast('09:10:11.000000' as timestamp))", TYPE_INT);
   TestIsNull("weekofyear(cast('09:10:11.000000' as timestamp))", TYPE_INT);
+  TestIsNull("week(cast('09:10:11.000000' as timestamp))", TYPE_INT);
   TestIsNull("datediff(cast('09:10:11.12345678' as timestamp), "
       "cast('2012-12-22' as timestamp))", TYPE_INT);
 
   TestIsNull("year(NULL)", TYPE_INT);
+  TestIsNull("quarter(NULL)", TYPE_INT);
   TestIsNull("month(NULL)", TYPE_INT);
   TestIsNull("dayofmonth(NULL)", TYPE_INT);
   TestIsNull("day(NULL)", TYPE_INT);
   TestIsNull("dayofweek(NULL)", TYPE_INT);
   TestIsNull("dayofyear(NULL)", TYPE_INT);
   TestIsNull("weekofyear(NULL)", TYPE_INT);
+  TestIsNull("week(NULL)", TYPE_INT);
   TestIsNull("datediff(NULL, cast('2011-12-22 09:10:11.12345678' as timestamp))",
       TYPE_INT);
   TestIsNull("datediff(cast('2012-12-22' as timestamp), NULL)", TYPE_INT);
@@ -6045,6 +6055,34 @@ TEST_F(ExprTest, TimestampFunctions) {
       "Saturday");
   TestStringValue("dayname(cast('2011-12-25 09:10:11.000000' as timestamp))", "Sunday");
   TestIsNull("dayname(NULL)", TYPE_STRING);
+
+  TestStringValue("monthname(cast('2011-01-18 09:10:11.000000' as timestamp))", "January");
+  TestStringValue("monthname(cast('2011-02-18 09:10:11.000000' as timestamp))", "February");
+  TestStringValue("monthname(cast('2011-03-18 09:10:11.000000' as timestamp))", "March");
+  TestStringValue("monthname(cast('2011-04-18 09:10:11.000000' as timestamp))", "April");
+  TestStringValue("monthname(cast('2011-05-18 09:10:11.000000' as timestamp))", "May");
+  TestStringValue("monthname(cast('2011-06-18 09:10:11.000000' as timestamp))", "June");
+  TestStringValue("monthname(cast('2011-07-18 09:10:11.000000' as timestamp))", "July");
+  TestStringValue("monthname(cast('2011-08-18 09:10:11.000000' as timestamp))", "August");
+  TestStringValue("monthname(cast('2011-09-18 09:10:11.000000' as timestamp))", "September");
+  TestStringValue("monthname(cast('2011-10-18 09:10:11.000000' as timestamp))", "October");
+  TestStringValue("monthname(cast('2011-11-18 09:10:11.000000' as timestamp))", "November");
+  TestStringValue("monthname(cast('2011-12-18 09:10:11.000000' as timestamp))", "December");
+  TestIsNull("monthname(NULL)", TYPE_STRING);
+
+  TestValue("quarter(cast('2011-01-18 09:10:11.000000' as timestamp))", TYPE_INT, 1);
+  TestValue("quarter(cast('2011-02-18 09:10:11.000000' as timestamp))", TYPE_INT, 1);
+  TestValue("quarter(cast('2011-03-18 09:10:11.000000' as timestamp))", TYPE_INT, 1);
+  TestValue("quarter(cast('2011-04-18 09:10:11.000000' as timestamp))", TYPE_INT, 2);
+  TestValue("quarter(cast('2011-05-18 09:10:11.000000' as timestamp))", TYPE_INT, 2);
+  TestValue("quarter(cast('2011-06-18 09:10:11.000000' as timestamp))", TYPE_INT, 2);
+  TestValue("quarter(cast('2011-07-18 09:10:11.000000' as timestamp))", TYPE_INT, 3);
+  TestValue("quarter(cast('2011-08-18 09:10:11.000000' as timestamp))", TYPE_INT, 3);
+  TestValue("quarter(cast('2011-09-18 09:10:11.000000' as timestamp))", TYPE_INT, 3);
+  TestValue("quarter(cast('2011-10-18 09:10:11.000000' as timestamp))", TYPE_INT, 4);
+  TestValue("quarter(cast('2011-11-18 09:10:11.000000' as timestamp))", TYPE_INT, 4);
+  TestValue("quarter(cast('2011-12-18 09:10:11.000000' as timestamp))", TYPE_INT, 4);
+  TestIsNull("quarter(NULL)", TYPE_INT);
 
   // Tests from Hive
   // The hive documentation states that timestamps are timezoneless, but the tests
@@ -6526,6 +6564,8 @@ TEST_F(ExprTest, TimestampFunctions) {
   // Extract using FROM keyword
   TestValue("extract(YEAR from cast('2006-05-12 18:27:28.12345' as timestamp))",
             TYPE_INT, 2006);
+  TestValue("extract(QUARTER from cast('2006-05-12 18:27:28.12345' as timestamp))",
+            TYPE_INT, 2);
   TestValue("extract(MoNTH from cast('2006-05-12 18:27:28.12345' as timestamp))",
             TYPE_INT, 5);
   TestValue("extract(DaY from cast('2006-05-12 18:27:28.12345' as timestamp))",
@@ -6547,6 +6587,8 @@ TEST_F(ExprTest, TimestampFunctions) {
   // Date_part, same as extract function but with arguments swapped
   TestValue("date_part('YEAR', cast('2006-05-12 18:27:28.12345' as timestamp))",
             TYPE_INT, 2006);
+  TestValue("date_part('QUARTER', cast('2006-05-12 18:27:28.12345' as timestamp))",
+            TYPE_INT, 2);
   TestValue("date_part('MoNTH', cast('2006-05-12 18:27:28.12345' as timestamp))",
             TYPE_INT, 5);
   TestValue("date_part('DaY', cast('2006-05-12 18:27:28.12345' as timestamp))",
@@ -7931,8 +7973,7 @@ TEST_F(ExprTest, DecimalOverflowCastsDecimalV2) {
   TestError("cast(99999999999999999999999999999.9 as decimal(29, 1))");
 
   // Tests converting a non-trivial empty string to a decimal (IMPALA-1566).
-  TestIsNull("cast(regexp_replace('','a','b') as decimal(15,2))",
-      ColumnType::CreateDecimalType(15,2));
+  TestError("cast(regexp_replace('','a','b') as decimal(15,2))");
 
   executor_->PopExecOption();
 }
@@ -8297,13 +8338,15 @@ TEST_F(ExprTest, UuidTest) {
 
 TEST_F(ExprTest, DateTruncTest) {
   TestTimestampValue("date_trunc('MILLENNIUM', '2016-05-08 10:30:00')",
-      TimestampValue::Parse("2000-01-01 00:00:00"));
-  TestTimestampValue("date_trunc('MILLENNIUM', '2000-01-01 00:00:00')",
-      TimestampValue::Parse("2000-01-01 00:00:00"));
+      TimestampValue::Parse("2001-01-01 00:00:00"));
+  TestTimestampValue("date_trunc('MILLENNIUM', '3000-12-31 23:59:59.999999999')",
+      TimestampValue::Parse("2001-01-01 00:00:00"));
+  TestTimestampValue("date_trunc('MILLENNIUM', '3001-01-01 00:00:00')",
+      TimestampValue::Parse("3001-01-01 00:00:00"));
   TestTimestampValue("date_trunc('CENTURY', '2016-05-08 10:30:00')",
-      TimestampValue::Parse("2000-01-01 00:00:00  "));
+      TimestampValue::Parse("2001-01-01 00:00:00  "));
   TestTimestampValue("date_trunc('CENTURY', '2116-05-08 10:30:00')",
-      TimestampValue::Parse("2100-01-01 00:00:00"));
+      TimestampValue::Parse("2101-01-01 00:00:00"));
   TestTimestampValue("date_trunc('DECADE', '2116-05-08 10:30:00')",
       TimestampValue::Parse("2110-01-01 00:00:00"));
   TestTimestampValue("date_trunc('YEAR', '2016-05-08 10:30:00')",
@@ -8340,9 +8383,9 @@ TEST_F(ExprTest, DateTruncTest) {
 
   // Test corner cases.
   TestTimestampValue("date_trunc('MILLENNIUM', '9999-12-31 23:59:59.999999999')",
-      TimestampValue::Parse("9000-01-01 00:00:00"));
+      TimestampValue::Parse("9001-01-01 00:00:00"));
   TestTimestampValue("date_trunc('CENTURY', '9999-12-31 23:59:59.999999999')",
-      TimestampValue::Parse("9900-01-01 00:00:00"));
+      TimestampValue::Parse("9901-01-01 00:00:00"));
   TestTimestampValue("date_trunc('DECADE', '9999-12-31 23:59:59.999999999')",
       TimestampValue::Parse("9990-01-01 00:00:00"));
   TestTimestampValue("date_trunc('YEAR', '9999-12-31 23:59:59.999999999')",
@@ -8351,10 +8394,6 @@ TEST_F(ExprTest, DateTruncTest) {
       TimestampValue::Parse("9999-12-01 00:00:00"));
   TestTimestampValue("date_trunc('WEEK', '9999-12-31 23:59:59.999999999')",
       TimestampValue::Parse("9999-12-27 00:00:00"));
-  TestTimestampValue("date_trunc('WEEK', '1400-01-06 23:59:59.999999999')",
-      TimestampValue::Parse("1400-01-06 00:00:00"));
-  TestTimestampValue("date_trunc('WEEK', '1400-01-07 23:59:59.999999999')",
-      TimestampValue::Parse("1400-01-06 00:00:00"));
   TestTimestampValue("date_trunc('DAY', '9999-12-31 23:59:59.999999999')",
       TimestampValue::Parse("9999-12-31 00:00:00"));
   TestTimestampValue("date_trunc('HOUR', '9999-12-31 23:59:59.999999999')",
@@ -8368,8 +8407,6 @@ TEST_F(ExprTest, DateTruncTest) {
   TestTimestampValue("date_trunc('MICROSECONDS', '9999-12-31 23:59:59.999999999')",
       TimestampValue::Parse("9999-12-31 23:59:59.999999"));
 
-  TestTimestampValue("date_trunc('CENTURY', '1400-01-01 00:00:00')",
-      TimestampValue::Parse("1400-01-01 00:00:00"));
   TestTimestampValue("date_trunc('DECADE', '1400-01-01 00:00:00')",
       TimestampValue::Parse("1400-01-01 00:00:00"));
   TestTimestampValue("date_trunc('YEAR', '1400-01-01 00:00:00')",
@@ -8389,11 +8426,25 @@ TEST_F(ExprTest, DateTruncTest) {
   TestTimestampValue("date_trunc('MICROSECONDS', '1400-01-01 00:00:00')",
       TimestampValue::Parse("1400-01-01 00:00:00"));
 
-  // valid input with invalid output
-  TestIsNull("date_trunc('MILLENNIUM', '1416-05-08 10:30:00')", TYPE_TIMESTAMP);
-  TestIsNull("date_trunc('MILLENNIUM', '1999-12-31 11:59:59.999999')", TYPE_TIMESTAMP);
+  // Test lower limit for century
+  TestIsNull("date_trunc('CENTURY', '1400-01-01 00:00:00')", TYPE_TIMESTAMP);
+  TestIsNull("date_trunc('CENTURY', '1400-12-31 23:59:59.999999999')", TYPE_TIMESTAMP);
+  TestTimestampValue("date_trunc('CENTURY', '1401-01-01 00:00:00')",
+      TimestampValue::Parse("1401-01-01 00:00:00"));
+
+  // Test lower limit for millennium
+  TestIsNull("date_trunc('MILLENNIUM', '1400-01-01 00:00:00')", TYPE_TIMESTAMP);
+  TestIsNull("date_trunc('MILLENNIUM', '2000-12-31 23:59:59.999999999')", TYPE_TIMESTAMP);
+  TestTimestampValue("date_trunc('MILLENNIUM', '2001-01-01 00:00:00')",
+      TimestampValue::Parse("2001-01-01 00:00:00"));
+
+  // Test lower limit for week
   TestIsNull("date_trunc('WEEK', '1400-01-01 00:00:00')", TYPE_TIMESTAMP);
-  TestIsNull("date_trunc('WEEK', '1400-01-05 00:00:00')", TYPE_TIMESTAMP);
+  TestIsNull("date_trunc('WEEK', '1400-01-05 23:59:59.999999999')", TYPE_TIMESTAMP);
+  TestTimestampValue("date_trunc('WEEK', '1400-01-06 00:00:00')",
+      TimestampValue::Parse("1400-01-06 00:00:00"));
+  TestTimestampValue("date_trunc('WEEK', '1400-01-07 23:59:59.999999999')",
+      TimestampValue::Parse("1400-01-06 00:00:00"));
 
   // Test invalid input.
   TestIsNull("date_trunc('HOUR', '12202010')", TYPE_TIMESTAMP);

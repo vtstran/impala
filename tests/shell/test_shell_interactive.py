@@ -214,22 +214,29 @@ class TestImpalaShellInteractive(object):
     Additionally, also test that comments are preserved.
     """
     # regex for pexpect, a shell prompt is expected after each command..
-    prompt_regex = '.*%s:2100.*' % socket.getfqdn()
+    prompt_regex = '\[{0}:2100[0-9]\]'.format(socket.getfqdn())
     # readline gets its input from tty, so using stdin does not work.
     child_proc = pexpect.spawn(SHELL_CMD)
-    queries = ["select\n1--comment;",
-        "select /*comment*/\n1;",
-        "select\n/*comm\nent*/\n1;"]
-    for query in queries:
+    # List of (input query, expected text in output).
+    # The expected output is usually the same as the input with a number prefix, except
+    # where the shell strips newlines before a semicolon.
+    queries = [
+        ("select\n1;--comment", "[1]: select\n1;--comment"),
+        ("select 1 --comment\n;", "[2]: select 1 --comment;"),
+        ("select 1 --comment\n\n\n;", "[3]: select 1 --comment;"),
+        ("select /*comment*/\n1;", "[4]: select /*comment*/\n1;"),
+        ("select\n/*comm\nent*/\n1;", "[5]: select\n/*comm\nent*/\n1;")]
+    for query, _ in queries:
       child_proc.expect(prompt_regex)
       child_proc.sendline(query)
+      child_proc.expect("Fetched 1 row\(s\) in .*s")
     child_proc.expect(prompt_regex)
     child_proc.sendline('quit;')
     p = ImpalaShell()
     p.send_cmd('history')
     result = p.get_result()
-    for query in queries:
-      assert query in result.stderr, "'%s' not in '%s'" % (query, result.stderr)
+    for _, history_entry in queries:
+      assert history_entry in result.stderr, "'%s' not in '%s'" % (history_entry, result.stderr)
 
   @pytest.mark.execute_serially
   def test_rerun(self):
@@ -437,6 +444,45 @@ class TestImpalaShellInteractive(object):
       assert "SeLeCt 'second command'" in result.stderr
     finally:
       os.chdir(cwd)
+
+  @pytest.mark.execute_serially
+  def test_line_ends_with_comment(self):
+    # IMPALA-5269: Test lines that end with a comment.
+    queries = ['select 1 + 1; --comment',
+               'select 1 + 1 --comment\n;']
+    for query in queries:
+      result = run_impala_shell_interactive(query)
+      assert '| 1 + 1 |' in result.stdout
+      assert '| 2     |' in result.stdout
+
+    queries = ['select \'some string\'; --comment',
+               'select \'some string\' --comment\n;']
+    for query in queries:
+      result = run_impala_shell_interactive(query)
+      assert '| \'some string\' |' in result.stdout
+      assert '| some string   |' in result.stdout
+
+    queries = ['select "--"; -- "--"',
+               'select \'--\'; -- "--"',
+               'select "--" -- "--"\n;',
+               'select \'--\' -- "--"\n;']
+    for query in queries:
+      result = run_impala_shell_interactive(query)
+      assert '| \'--\' |' in result.stdout
+      assert '| --   |' in result.stdout
+
+    query = ('select * from (\n' +
+             'select count(*) from functional.alltypes\n' +
+             ') v; -- Incomplete SQL statement in this line')
+    result = run_impala_shell_interactive(query)
+    assert '| count(*) |' in result.stdout
+
+    query = ('select id from functional.alltypes\n' +
+             'order by id; /*\n' +
+             '* Multi-line comment\n' +
+             '*/')
+    result = run_impala_shell_interactive(query)
+    assert '| id   |' in result.stdout
 
 def run_impala_shell_interactive(input_lines, shell_args=None):
   """Runs a command in the Impala shell interactively."""

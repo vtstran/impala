@@ -129,7 +129,7 @@ class KrpcDataStreamSender::Channel : public CacheLineAligned {
   // it reaches capacity. This call may block if the row batch's capacity is reached
   // and the preceding RPC is still in progress. Returns error status if serialization
   // failed or if the preceding RPC failed. Return OK otherwise.
-  Status AddRow(TupleRow* row);
+  Status ALWAYS_INLINE AddRow(TupleRow* row);
 
   // Shutdowns the channel and frees the row batch allocation. Any in-flight RPC will
   // be cancelled. It's expected that clients normally call FlushAndSendEos() before
@@ -306,6 +306,7 @@ Status KrpcDataStreamSender::Channel::Init(RuntimeState* state) {
 }
 
 void KrpcDataStreamSender::Channel::MarkDone(const Status& status) {
+  if (UNLIKELY(!status.ok())) COUNTER_ADD(parent_->rpc_failure_counter_, 1);
   rpc_status_ = status;
   rpc_in_flight_ = false;
   rpc_in_flight_batch_ = nullptr;
@@ -332,6 +333,7 @@ Status KrpcDataStreamSender::Channel::WaitForRpc(std::unique_lock<SpinLock>* loc
   DCHECK(!rpc_in_flight_);
   if (UNLIKELY(!rpc_status_.ok())) {
     LOG(ERROR) << "channel send to " << TNetworkAddressToString(address_) << " failed: "
+               << "(fragment_instance_id=" << fragment_instance_id_ << "): "
                << rpc_status_.GetDetail();
     return rpc_status_;
   }
@@ -443,7 +445,7 @@ Status KrpcDataStreamSender::Channel::DoTransmitDataRpc() {
 
 Status KrpcDataStreamSender::Channel::TransmitData(
     const OutboundRowBatch* outbound_batch) {
-  VLOG_ROW << "Channel::TransmitData() finst_id=" << fragment_instance_id_
+  VLOG_ROW << "Channel::TransmitData() fragment_instance_id=" << fragment_instance_id_
            << " dest_node=" << dest_node_id_
            << " #rows=" << outbound_batch->header()->num_rows();
   std::unique_lock<SpinLock> l(lock_);
@@ -474,7 +476,7 @@ Status KrpcDataStreamSender::Channel::SendCurrentBatch() {
   return Status::OK();
 }
 
-Status KrpcDataStreamSender::Channel::AddRow(TupleRow* row) {
+inline Status KrpcDataStreamSender::Channel::AddRow(TupleRow* row) {
   if (batch_->AtCapacity()) {
     // batch_ is full, let's send it.
     RETURN_IF_ERROR(SendCurrentBatch());
@@ -523,7 +525,7 @@ Status KrpcDataStreamSender::Channel::DoEndDataStreamRpc() {
 }
 
 Status KrpcDataStreamSender::Channel::FlushAndSendEos(RuntimeState* state) {
-  VLOG_RPC << "Channel::FlushAndSendEos() instance_id=" << fragment_instance_id_
+  VLOG_RPC << "Channel::FlushAndSendEos() fragment_instance_id=" << fragment_instance_id_
            << " dest_node=" << dest_node_id_
            << " #rows= " << batch_->num_rows();
 
@@ -535,9 +537,12 @@ Status KrpcDataStreamSender::Channel::FlushAndSendEos(RuntimeState* state) {
     std::unique_lock<SpinLock> l(lock_);
     RETURN_IF_ERROR(WaitForRpc(&l));
     DCHECK(!rpc_in_flight_);
+    DCHECK(rpc_status_.ok());
     if (UNLIKELY(remote_recvr_closed_)) return Status::OK();
-    VLOG_RPC << "calling EndDataStream() to terminate channel.";
+    VLOG_RPC << "calling EndDataStream() to terminate channel. fragment_instance_id="
+             << fragment_instance_id_;
     rpc_in_flight_ = true;
+    COUNTER_ADD(parent_->eos_sent_counter_, 1);
     RETURN_IF_ERROR(DoEndDataStreamRpc());
     RETURN_IF_ERROR(WaitForRpc(&l));
   }
@@ -619,7 +624,9 @@ Status KrpcDataStreamSender::Prepare(
       &partition_expr_evals_));
   serialize_batch_timer_ = ADD_TIMER(profile(), "SerializeBatchTime");
   rpc_retry_counter_ = ADD_COUNTER(profile(), "RpcRetry", TUnit::UNIT);
+  rpc_failure_counter_ = ADD_COUNTER(profile(), "RpcFailure", TUnit::UNIT);
   bytes_sent_counter_ = ADD_COUNTER(profile(), "BytesSent", TUnit::BYTES);
+  eos_sent_counter_ = ADD_COUNTER(profile(), "EosSent", TUnit::UNIT);
   uncompressed_bytes_counter_ =
       ADD_COUNTER(profile(), "UncompressedRowBatchSize", TUnit::BYTES);
   total_sent_rows_counter_= ADD_COUNTER(profile(), "RowsReturned", TUnit::UNIT);
@@ -660,16 +667,29 @@ Status KrpcDataStreamSender::Send(RuntimeState* state, RowBatch* batch) {
   } else if (partition_type_ == TPartitionType::KUDU) {
     DCHECK_EQ(partition_expr_evals_.size(), 1);
     int num_channels = channels_.size();
-    for (int i = 0; i < batch->num_rows(); ++i) {
-      TupleRow* row = batch->GetRow(i);
-      int32_t partition =
-          *reinterpret_cast<int32_t*>(partition_expr_evals_[0]->GetValue(row));
-      if (partition < 0) {
-        // This row doesn't correspond to a partition, e.g. it's outside the given ranges.
-        partition = next_unknown_partition_;
-        ++next_unknown_partition_;
+    const int num_rows = batch->num_rows();
+    const int hash_batch_size = RowBatch::HASH_BATCH_SIZE;
+    int channel_ids[hash_batch_size];
+
+    for (int batch_start = 0; batch_start < num_rows; batch_start += hash_batch_size) {
+      int batch_window_size = min(num_rows - batch_start, hash_batch_size);
+      for (int i = 0; i < batch_window_size; ++i) {
+        TupleRow* row = batch->GetRow(i + batch_start);
+        int32_t partition =
+            *reinterpret_cast<int32_t*>(partition_expr_evals_[0]->GetValue(row));
+        if (partition < 0) {
+          // This row doesn't correspond to a partition,
+          // e.g. it's outside the given ranges.
+          partition = next_unknown_partition_;
+          ++next_unknown_partition_;
+        }
+        channel_ids[i] = partition % num_channels;
       }
-      RETURN_IF_ERROR(channels_[partition % num_channels]->AddRow(row));
+
+      for (int i = 0; i < batch_window_size; ++i) {
+        TupleRow* row = batch->GetRow(i + batch_start);
+        RETURN_IF_ERROR(channels_[channel_ids[i]]->AddRow(row));
+      }
     }
   } else {
     DCHECK_EQ(partition_type_, TPartitionType::HASH_PARTITIONED);
@@ -677,20 +697,36 @@ Status KrpcDataStreamSender::Send(RuntimeState* state, RowBatch* batch) {
     // TODO: encapsulate this in an Expr as we've done for Kudu above and remove this case
     // once we have codegen here.
     int num_channels = channels_.size();
-    for (int i = 0; i < batch->num_rows(); ++i) {
-      TupleRow* row = batch->GetRow(i);
-      uint64_t hash_val = EXCHANGE_HASH_SEED;
-      for (int j = 0; j < partition_exprs_.size(); ++j) {
-        ScalarExprEvaluator* eval = partition_expr_evals_[j];
-        void* partition_val = eval->GetValue(row);
-        // We can't use the crc hash function here because it does not result in
-        // uncorrelated hashes with different seeds. Instead we use FastHash.
-        // TODO: fix crc hash/GetHashValue()
-        DCHECK(&(eval->root()) == partition_exprs_[j]);
-        hash_val = RawValue::GetHashValueFastHash(
-            partition_val, partition_exprs_[j]->type(), hash_val);
+    const int num_partition_exprs = partition_exprs_.size();
+    const int num_rows = batch->num_rows();
+    const int hash_batch_size = RowBatch::HASH_BATCH_SIZE;
+    int channel_ids[hash_batch_size];
+
+    // Break the loop into two parts break the data dependency between computing
+    // the hash and calling AddRow()
+    // To keep stack allocation small a RowBatch::HASH_BATCH is used
+    for (int batch_start = 0; batch_start < num_rows; batch_start += hash_batch_size) {
+      int batch_window_size = min(num_rows - batch_start, hash_batch_size);
+      for (int i = 0; i < batch_window_size; ++i) {
+        TupleRow* row = batch->GetRow(i + batch_start);
+        uint64_t hash_val = EXCHANGE_HASH_SEED;
+        for (int j = 0; j < num_partition_exprs; ++j) {
+          ScalarExprEvaluator* eval = partition_expr_evals_[j];
+          void* partition_val = eval->GetValue(row);
+          // We can't use the crc hash function here because it does not result in
+          // uncorrelated hashes with different seeds. Instead we use FastHash.
+          // TODO: fix crc hash/GetHashValue()
+          DCHECK(&(eval->root()) == partition_exprs_[j]);
+          hash_val = RawValue::GetHashValueFastHash(
+              partition_val, partition_exprs_[j]->type(), hash_val);
+        }
+        channel_ids[i] = hash_val % num_channels;
       }
-      RETURN_IF_ERROR(channels_[hash_val % num_channels]->AddRow(row));
+
+      for (int i = 0; i < batch_window_size; ++i) {
+        TupleRow* row = batch->GetRow(i + batch_start);
+        RETURN_IF_ERROR(channels_[channel_ids[i]]->AddRow(row));
+      }
     }
   }
   COUNTER_ADD(total_sent_rows_counter_, batch->num_rows());

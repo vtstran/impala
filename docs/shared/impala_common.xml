@@ -2602,7 +2602,7 @@ flight_num:           INT32 SNAPPY DO:83456393 FPO:83488603 SZ:10216514/11474301
       <p rev="" id="analytic_partition_pruning_caveat">
         In queries involving both analytic functions and partitioned tables, partition pruning only occurs for columns named in the <codeph>PARTITION BY</codeph>
         clause of the analytic function call. For example, if an analytic function query has a clause such as <codeph>WHERE year=2016</codeph>,
-        the way to make the query prune all other <codeph>YEAR</codeph> partitions is to include <codeph>PARTITION BY year</codeph>in the analytic function call;
+        the way to make the query prune all other <codeph>YEAR</codeph> partitions is to include <codeph>PARTITION BY year</codeph> in the analytic function call;
         for example, <codeph>OVER (PARTITION BY year,<varname>other_columns</varname> <varname>other_analytic_clauses</varname>)</codeph>.
 <!--
         These examples illustrate the technique:
@@ -3443,10 +3443,39 @@ select * from header_line limit 10;
       </p>
 
       <p id="load_catalog_in_background">
-        By default, the metadata loading and caching on startup happens asynchronously, so Impala can begin
-        accepting requests promptly. To enable the original behavior, where Impala waited until all metadata was
-        loaded before accepting any requests, set the <cmdname>catalogd</cmdname> configuration option
-        <codeph>--load_catalog_in_background=false</codeph>.
+        Use <codeph>--load_catalog_in_background</codeph> option to control when
+        the metadata of a table is loaded.
+        <ul>
+          <li>
+            If set to <codeph>false</codeph>, the metadata of a table is
+            loaded when it is referenced for the first time. This means that the
+            first run of a particular query can be slower than subsequent runs.
+            Starting in Impala 2.2, the default for
+            <codeph>load_catalog_in_background</codeph> is
+            <codeph>false</codeph>.
+          </li>
+          <li>
+            If set to <codeph>true</codeph>, the catalog service attempts to
+            load metadata for a table even if no query needed that metadata. So
+            metadata will possibly be already loaded when the first query that
+            would need it is run. However, for the following reasons, we
+            recommend not to set the option to <codeph>true</codeph>.
+            <ul>
+              <li>
+                Background load can interfere with query-specific metadata
+                loading. This can happen on startup or after invalidating
+                metadata, with a duration depending on the amount of metadata,
+                and can lead to a seemingly random long running queries that are
+                difficult to diagnose.
+              </li>
+              <li>
+                Impala may load metadata for tables that are possibly never
+                used, potentially increasing catalog size and consequently memory
+                usage for both catalog service and Impala Daemon.
+              </li>
+            </ul>
+          </li>
+        </ul>
       </p>
 
       <ul id="catalogd_xrefs">
@@ -3458,7 +3487,6 @@ select * from header_line limit 10;
             <cmdname>catalogd</cmdname> daemon.
           </p>
         </li>
-
         <li>
           <p>
             The <codeph>REFRESH</codeph> and <codeph>INVALIDATE METADATA</codeph> statements are no longer needed
@@ -3592,15 +3620,6 @@ sudo pip-python install ssl</codeblock>
         files in encryption zones. The queries fall back to the normal read
         path during query execution, which might cause some performance overhead.
       </p>
-
-      <note id="llama_query_options_obsolete">
-        <p>
-          This query option no longer has any effect.
-          The use of the Llama component for integrated resource management within YARN is no
-          longer supported with <keyword keyref="impala23_full"/> and higher, and the Llama
-          support code is removed entirely in <keyword keyref="impala28_full"/> and higher.
-        </p>
-      </note>
 
       <note id="impala_llama_obsolete" rev="IMPALA-4160">
         <p>

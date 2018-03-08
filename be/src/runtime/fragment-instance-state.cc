@@ -26,7 +26,6 @@
 #include <boost/date_time/posix_time/posix_time_types.hpp>
 
 #include "common/names.h"
-#include "common/thread-debug-info.h"
 #include "codegen/llvm-codegen.h"
 #include "exec/plan-root-sink.h"
 #include "exec/exec-node.h"
@@ -135,7 +134,8 @@ Status FragmentInstanceState::Prepare() {
   event_sequence_->Start(query_state_->fragment_events_start_time());
   UpdateState(StateEvent::PREPARE_START);
 
-  runtime_state_->InitFilterBank();
+  RETURN_IF_ERROR(runtime_state_->InitFilterBank(
+      fragment_ctx_.fragment.runtime_filters_reservation_bytes));
 
   // Reserve one main thread from the pool
   runtime_state_->resource_pool()->AcquireThreadToken();
@@ -224,10 +224,7 @@ Status FragmentInstanceState::Prepare() {
     string thread_name = Substitute("profile-report (finst:$0)", PrintId(instance_id()));
     unique_lock<mutex> l(report_thread_lock_);
     RETURN_IF_ERROR(Thread::Create(FragmentInstanceState::FINST_THREAD_GROUP_NAME,
-        thread_name, [this]() {
-          GetThreadDebugInfo()->SetInstanceId(this->instance_id());
-          this->ReportProfileThread();
-        }, &report_thread_, true));
+        thread_name, [this]() { this->ReportProfileThread(); }, &report_thread_, true));
     // Make sure the thread started up, otherwise ReportProfileThread() might get into
     // a race with StopReportThread().
     while (!report_thread_active_) report_thread_started_cv_.Wait(l);
@@ -406,6 +403,7 @@ void FragmentInstanceState::UpdateState(const StateEvent event)
 
     case StateEvent::WAITING_FOR_FIRST_BATCH:
       DCHECK_EQ(current_state, TFInstanceExecState::WAITING_FOR_OPEN);
+      event_sequence_->MarkEvent("Open Finished");
       next_state = TFInstanceExecState::WAITING_FOR_FIRST_BATCH;
       break;
 
@@ -428,11 +426,7 @@ void FragmentInstanceState::UpdateState(const StateEvent event)
       break;
 
     case StateEvent::LAST_BATCH_SENT:
-      if (UNLIKELY(current_state == TFInstanceExecState::WAITING_FOR_OPEN)) {
-        event_sequence_->MarkEvent("Open Finished");
-      } else {
-        DCHECK_EQ(current_state, TFInstanceExecState::PRODUCING_DATA);
-      }
+      DCHECK_EQ(current_state, TFInstanceExecState::PRODUCING_DATA);
       next_state = TFInstanceExecState::LAST_BATCH_SENT;
       break;
 

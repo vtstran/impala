@@ -46,9 +46,6 @@
 
 #include "common/names.h"
 
-// TODO: Remove this flag in a compatibility-breaking release.
-DEFINE_bool(suppress_unknown_disk_id_warnings, false, "Deprecated.");
-
 #ifndef NDEBUG
 DECLARE_bool(skip_file_runtime_filtering);
 #endif
@@ -335,6 +332,7 @@ Status HdfsScanNodeBase::Open(RuntimeState* state) {
   // TODO: Revisit counters and move the counters specific to multi-threaded scans
   // into HdfsScanNode.
   read_timer_ = ADD_TIMER(runtime_profile(), TOTAL_HDFS_READ_TIMER);
+  open_file_timer_ = ADD_TIMER(runtime_profile(), TOTAL_HDFS_OPEN_FILE_TIMER);
   per_read_thread_throughput_counter_ = runtime_profile()->AddDerivedCounter(
       PER_READ_THREAD_THROUGHPUT_COUNTER, TUnit::BYTES_PER_SECOND,
       bind<int64_t>(&RuntimeProfile::UnitsPerSecond, bytes_read_counter_, read_timer_));
@@ -352,6 +350,7 @@ Status HdfsScanNodeBase::Open(RuntimeState* state) {
   runtime_state_->io_mgr()->set_bytes_read_counter(
       reader_context_.get(), bytes_read_counter());
   runtime_state_->io_mgr()->set_read_timer(reader_context_.get(), read_timer());
+  runtime_state_->io_mgr()->set_open_file_timer(reader_context_.get(), open_file_timer());
   runtime_state_->io_mgr()->set_active_read_thread_counter(
       reader_context_.get(), &active_hdfs_read_thread_counter_);
   runtime_state_->io_mgr()->set_disks_access_bitmap(

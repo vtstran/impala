@@ -185,7 +185,7 @@ Status KuduScanner::OpenNextScanToken(const string& scan_token, bool* eos) {
               ctx.filter->filter_desc().targets[it->second];
           const string& col_name = target_desc.kudu_col_name;
           DCHECK(col_name != "");
-          ColumnType col_type = ColumnType::FromThrift(target_desc.kudu_col_type);
+          const ColumnType& col_type = ColumnType::FromThrift(target_desc.kudu_col_type);
 
           void* min = filter->GetMin();
           void* max = filter->GetMax();
@@ -209,14 +209,14 @@ Status KuduScanner::OpenNextScanToken(const string& scan_token, bool* eos) {
           }
 
           KuduValue* min_value;
-          RETURN_IF_ERROR(CreateKuduValue(filter->type(), min, &min_value));
+          RETURN_IF_ERROR(CreateKuduValue(col_type, min, &min_value));
           KUDU_RETURN_IF_ERROR(
               scanner_->AddConjunctPredicate(scan_node_->table_->NewComparisonPredicate(
                   col_name, KuduPredicate::ComparisonOp::GREATER_EQUAL, min_value)),
               "Failed to add min predicate");
 
           KuduValue* max_value;
-          RETURN_IF_ERROR(CreateKuduValue(filter->type(), max, &max_value));
+          RETURN_IF_ERROR(CreateKuduValue(col_type, max, &max_value));
           KUDU_RETURN_IF_ERROR(
               scanner_->AddConjunctPredicate(scan_node_->table_->NewComparisonPredicate(
                   col_name, KuduPredicate::ComparisonOp::LESS_EQUAL, max_value)),
@@ -255,8 +255,13 @@ Status KuduScanner::HandleEmptyProjection(RowBatch* row_batch) {
       }
     }
   }
+  for (int i = 0; i < num_to_commit; ++i) {
+    // IMPALA-6258: Initialize tuple ptrs to non-null value
+    TupleRow* row = row_batch->GetRow(row_batch->AddRow());
+    row->SetTuple(0, Tuple::POISON);
+    row_batch->CommitLastRow();
+  }
   cur_kudu_batch_num_read_ += rows_to_add;
-  row_batch->CommitRows(num_to_commit);
   return Status::OK();
 }
 

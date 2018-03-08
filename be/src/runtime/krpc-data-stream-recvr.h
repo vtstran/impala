@@ -26,6 +26,7 @@
 #include "common/object-pool.h"
 #include "common/status.h"
 #include "gen-cpp/Types_types.h"   // for TUniqueId
+#include "runtime/bufferpool/buffer-pool.h"
 #include "runtime/descriptors.h"
 #include "util/tuple-row-compare.h"
 
@@ -101,7 +102,9 @@ class KrpcDataStreamRecvr : public DataStreamRecvrBase {
   const TUniqueId& fragment_instance_id() const { return fragment_instance_id_; }
   PlanNodeId dest_node_id() const { return dest_node_id_; }
   const RowDescriptor* row_desc() const { return row_desc_; }
-  MemTracker* mem_tracker() const { return mem_tracker_.get(); }
+  MemTracker* deferred_rpc_tracker() const { return deferred_rpc_tracker_.get(); }
+  MemTracker* parent_tracker() const { return parent_tracker_; }
+  BufferPool::ClientHandle* client() const { return client_; }
 
  private:
   friend class KrpcDataStreamMgr;
@@ -110,7 +113,8 @@ class KrpcDataStreamRecvr : public DataStreamRecvrBase {
   KrpcDataStreamRecvr(KrpcDataStreamMgr* stream_mgr, MemTracker* parent_tracker,
       const RowDescriptor* row_desc, const TUniqueId& fragment_instance_id,
       PlanNodeId dest_node_id, int num_senders, bool is_merging,
-      int64_t total_buffer_limit, RuntimeProfile* profile);
+      int64_t total_buffer_limit, RuntimeProfile* profile,
+      BufferPool::ClientHandle* client);
 
   /// Adds a new row batch to the appropriate sender queue. If the row batch can be
   /// inserted, the RPC will be responded to before this function returns. If the batch
@@ -166,8 +170,16 @@ class KrpcDataStreamRecvr : public DataStreamRecvrBase {
   /// total number of bytes held across all sender queues.
   AtomicInt32 num_buffered_bytes_;
 
-  /// Memtracker for batches in the sender queue(s).
-  boost::scoped_ptr<MemTracker> mem_tracker_;
+  /// Memtracker for payloads of deferred Rpcs in the sender queue(s).
+  /// This must be accessed with 'lock_' held to avoid race with Close().
+  boost::scoped_ptr<MemTracker> deferred_rpc_tracker_;
+
+  /// The MemTracker of the exchange node which owns this receiver. Not owned.
+  /// This is the MemTracker which 'client_' below internally references.
+  MemTracker* parent_tracker_;
+
+  /// The buffer pool client for allocating buffers of incoming row batches. Not owned.
+  BufferPool::ClientHandle* client_;
 
   /// One or more queues of row batches received from senders. If is_merging_ is true,
   /// there is one SenderQueue for each sender. Otherwise, row batches from all senders
@@ -189,7 +201,7 @@ class KrpcDataStreamRecvr : public DataStreamRecvrBase {
   RuntimeProfile* recvr_side_profile_;
   RuntimeProfile* sender_side_profile_;
 
-  /// Number of bytes received.
+  /// Number of bytes received but not necessarily enqueued.
   RuntimeProfile::Counter* bytes_received_counter_;
 
   /// Time series of number of bytes received, samples bytes_received_counter_
@@ -205,11 +217,22 @@ class KrpcDataStreamRecvr : public DataStreamRecvrBase {
   /// TODO: Turn this into a wall-clock timer.
   RuntimeProfile::Counter* first_batch_wait_total_timer_;
 
-  /// Total number of batches received and deferred as sender queue is full.
+  /// Total number of batches which arrived at this receiver but not necessarily received
+  /// or enqueued. An arrived row batch will eventually be received if there is no error
+  /// unpacking the RPC payload and the receiving stream is not cancelled.
+  RuntimeProfile::Counter* num_arrived_batches_;
+
+  /// Total number of batches received but not necessarily enqueued.
+  RuntimeProfile::Counter* num_received_batches_;
+
+  /// Total number of batches received and enqueued into the row batch queue.
+  RuntimeProfile::Counter* num_enqueued_batches_;
+
+  /// Total number of batches deferred because of early senders or full row batch queue.
   RuntimeProfile::Counter* num_deferred_batches_;
 
-  /// Total number of batches received and accepted into the sender queue.
-  RuntimeProfile::Counter* num_accepted_batches_;
+  /// Total number of EOS received.
+  RuntimeProfile::Counter* num_eos_received_;
 
   /// Total wall-clock time spent waiting for data to arrive in the recv buffer.
   RuntimeProfile::Counter* data_arrival_timer_;

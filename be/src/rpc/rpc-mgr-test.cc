@@ -16,8 +16,9 @@
 // under the License.
 
 #include "rpc/rpc-mgr-test-base.h"
+#include "service/fe-support.h"
 
-using kudu::rpc::ServiceIf;
+using kudu::rpc::GeneratedServiceIf;
 using kudu::rpc::RpcController;
 using kudu::rpc::RpcContext;
 using kudu::MonoDelta;
@@ -31,11 +32,11 @@ namespace impala {
 
 // For tests that do not require kerberized testing, we use RpcTest.
 class RpcMgrTest : public RpcMgrTestBase<testing::Test> {
-  virtual void SetUp() {
+  virtual void SetUp() override {
     RpcMgrTestBase::SetUp();
   }
 
-  virtual void TearDown() {
+  virtual void TearDown() override {
     RpcMgrTestBase::TearDown();
   }
 };
@@ -178,12 +179,12 @@ TEST_F(RpcMgrTest, SlowCallback) {
   // Test a service which is slow to respond and has a short queue.
   // Set a timeout on the client side. Expect either a client timeout
   // or the service queue filling up.
-  unique_ptr<ServiceIf> impl(new PingServiceImpl(rpc_mgr_.metric_entity(),
-      rpc_mgr_.result_tracker(), service_tracker(), slow_cb));
+  GeneratedServiceIf* ping_impl = TakeOverService(make_unique<PingServiceImpl>(
+      rpc_mgr_.metric_entity(), rpc_mgr_.result_tracker(), slow_cb));
   const int num_service_threads = 1;
   const int queue_size = 3;
-  ASSERT_OK(rpc_mgr_.RegisterService(num_service_threads, queue_size, move(impl),
-      service_tracker()));
+  ASSERT_OK(rpc_mgr_.RegisterService(num_service_threads, queue_size, ping_impl,
+      static_cast<PingServiceImpl*>(ping_impl)->mem_tracker()));
 
   FLAGS_num_acceptor_threads = 2;
   FLAGS_num_reactor_threads = 10;
@@ -204,9 +205,10 @@ TEST_F(RpcMgrTest, SlowCallback) {
 }
 
 TEST_F(RpcMgrTest, AsyncCall) {
-  unique_ptr<ServiceIf> scan_mem_impl(new ScanMemServiceImpl(rpc_mgr_.metric_entity(),
-      rpc_mgr_.result_tracker(), service_tracker()));
-  ASSERT_OK(rpc_mgr_.RegisterService(10, 10, move(scan_mem_impl), service_tracker()));
+  GeneratedServiceIf* scan_mem_impl = TakeOverService(make_unique<ScanMemServiceImpl>(
+      rpc_mgr_.metric_entity(), rpc_mgr_.result_tracker()));
+  ASSERT_OK(rpc_mgr_.RegisterService(10, 10, scan_mem_impl,
+      static_cast<ScanMemServiceImpl*>(scan_mem_impl)->mem_tracker()));
 
   unique_ptr<ScanMemServiceProxy> scan_mem_proxy;
   ASSERT_OK(rpc_mgr_.GetProxy<ScanMemServiceProxy>(krpc_address_, &scan_mem_proxy));
@@ -256,7 +258,8 @@ TEST_F(RpcMgrTest, NegotiationTimeout) {
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
-  impala::InitCommonRuntime(argc, argv, false, impala::TestInfo::BE_TEST);
+  impala::InitCommonRuntime(argc, argv, true, impala::TestInfo::BE_TEST);
+  impala::InitFeSupport();
 
   // Fill in the path of the current binary for use by the tests.
   CURRENT_EXECUTABLE_PATH = argv[0];

@@ -147,9 +147,10 @@ TEST(QueryOptions, SetByteOptions) {
       {MAKE_OPTIONDEF(runtime_filter_min_size),
           {RuntimeFilterBank::MIN_BLOOM_FILTER_SIZE,
               RuntimeFilterBank::MAX_BLOOM_FILTER_SIZE}},
+      // Lower limit for runtime_filter_max_size is FLAGS_min_buffer_size which has a
+      // default value of is 8KB.
       {MAKE_OPTIONDEF(runtime_filter_max_size),
-          {RuntimeFilterBank::MIN_BLOOM_FILTER_SIZE,
-              RuntimeFilterBank::MAX_BLOOM_FILTER_SIZE}},
+          {8 * 1024, RuntimeFilterBank::MAX_BLOOM_FILTER_SIZE}},
       {MAKE_OPTIONDEF(runtime_bloom_filter_size),
           {RuntimeFilterBank::MIN_BLOOM_FILTER_SIZE,
               RuntimeFilterBank::MAX_BLOOM_FILTER_SIZE}}
@@ -224,7 +225,9 @@ TEST(QueryOptions, SetIntOptions) {
       {MAKE_OPTIONDEF(mt_dop),                         {0, 64}},
       {MAKE_OPTIONDEF(disable_codegen_rows_threshold), {0, I32_MAX}},
       {MAKE_OPTIONDEF(max_num_runtime_filters),        {0, I32_MAX}},
-      {MAKE_OPTIONDEF(batch_size),                     {0, 65536}}
+      {MAKE_OPTIONDEF(batch_size),                     {0, 65536}},
+      {MAKE_OPTIONDEF(query_timeout_s),                {0, I32_MAX}},
+      {MAKE_OPTIONDEF(exec_time_limit_s),              {0, I32_MAX}},
   };
   for (const auto& test_case : case_set) {
     const OptionDef<int32_t>& option_def = test_case.first;
@@ -308,6 +311,15 @@ TEST(QueryOptions, SetSpecialOptions) {
     TestError("-1");
     TestError("0");
     TestError(to_string(ROW_SIZE_LIMIT + 1).c_str());
+  }
+  // RUNTIME_FILTER_MAX_SIZE should not be less than FLAGS_min_buffer_size
+  {
+    OptionDef<int32_t> key_def = MAKE_OPTIONDEF(runtime_filter_max_size);
+    auto TestOk = MakeTestOkFn(options, key_def);
+    auto TestError = MakeTestErrFn(options, key_def);
+    TestOk("128KB", 128 * 1024);
+    TestError("8191"); // default value of FLAGS_min_buffer_size is 8KB
+    TestOk("64KB", 64 * 1024);
   }
 }
 

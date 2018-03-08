@@ -19,11 +19,14 @@ package org.apache.impala.catalog;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.hadoop.fs.Path;
+import org.apache.impala.analysis.TableName;
 import org.apache.impala.catalog.MetaStoreClientPool.MetaStoreClient;
-import org.apache.impala.common.ImpalaException;
+import org.apache.impala.common.InternalException;
 import org.apache.impala.common.Pair;
 import org.apache.impala.service.FeSupport;
 import org.apache.impala.thrift.TCatalogObject;
@@ -82,10 +85,8 @@ public class ImpaladCatalog extends Catalog {
   // all objects in the catalog have at a minimum, this version. Because updates may
   // be applied out of band of a StateStore heartbeat, it is possible the catalog
   // contains some objects > than this version.
-  private long lastSyncedCatalogVersion_ = Catalog.INITIAL_CATALOG_VERSION;
-
-  // Flag to determine if the Catalog is ready to accept user requests. See isReady().
-  private final AtomicBoolean isReady_ = new AtomicBoolean(false);
+  private AtomicLong lastSyncedCatalogVersion_ =
+      new AtomicLong(Catalog.INITIAL_CATALOG_VERSION);
 
   // Tracks modifications to this Impalad's catalog from direct updates to the cache.
   private final CatalogDeltaLog catalogDeltaLog_ = new CatalogDeltaLog();
@@ -157,7 +158,7 @@ public class ImpaladCatalog extends Catalog {
     if (req.isSetCatalog_service_id()) setCatalogServiceId(req.catalog_service_id);
     ArrayDeque<TCatalogObject> updatedObjects = new ArrayDeque<>();
     ArrayDeque<TCatalogObject> deletedObjects = new ArrayDeque<>();
-    long newCatalogVersion = lastSyncedCatalogVersion_;
+    long newCatalogVersion = lastSyncedCatalogVersion_.get();
     Pair<Boolean, ByteBuffer> update;
     while ((update = FeSupport.NativeGetNextCatalogObjectUpdate(req.native_iterator_ptr))
         != null) {
@@ -205,10 +206,9 @@ public class ImpaladCatalog extends Catalog {
 
     for (TCatalogObject catalogObject: deletedObjects) removeCatalogObject(catalogObject);
 
-    lastSyncedCatalogVersion_ = newCatalogVersion;
+    lastSyncedCatalogVersion_.set(newCatalogVersion);
     // Cleanup old entries in the log.
-    catalogDeltaLog_.garbageCollect(lastSyncedCatalogVersion_);
-    isReady_.set(true);
+    catalogDeltaLog_.garbageCollect(newCatalogVersion);
     // Notify all the threads waiting on a catalog update.
     synchronized (catalogUpdateEventNotifier_) {
       catalogUpdateEventNotifier_.notifyAll();
@@ -217,6 +217,13 @@ public class ImpaladCatalog extends Catalog {
         CatalogObjectVersionQueue.INSTANCE.getMinimumVersion(), newCatalogVersion);
   }
 
+
+  /**
+   * Issues a load request to the catalogd for the given tables.
+   */
+  public void prioritizeLoad(Set<TableName> tableNames) throws InternalException {
+    FeSupport.PrioritizeLoad(tableNames);
+  }
 
   /**
    * Causes the calling thread to wait until a catalog update notification has been sent
@@ -234,27 +241,6 @@ public class ImpaladCatalog extends Catalog {
     }
   }
 
-  /**
-   * Returns the Table object for the given dbName/tableName. Returns null
-   * if the table does not exist. Will throw a TableLoadingException if the table's
-   * metadata was not able to be loaded successfully and DatabaseNotFoundException
-   * if the parent database does not exist.
-   */
-  @Override
-  public Table getTable(String dbName, String tableName)
-      throws CatalogException {
-    Table table = super.getTable(dbName, tableName);
-    if (table == null) return null;
-
-    if (table.isLoaded() && table instanceof IncompleteTable) {
-      // If there were problems loading this table's metadata, throw an exception
-      // when it is accessed.
-      ImpalaException cause = ((IncompleteTable) table).getCause();
-      if (cause instanceof TableLoadingException) throw (TableLoadingException) cause;
-      throw new TableLoadingException("Missing metadata for table: " + tableName, cause);
-    }
-    return table;
-  }
 
   /**
    * Returns the HDFS path where the metastore would create the given table. If the table
@@ -381,7 +367,7 @@ public class ImpaladCatalog extends Catalog {
             "Unexpected TCatalogObjectType: " + catalogObject.getType());
     }
 
-    if (catalogObject.getCatalog_version() > lastSyncedCatalogVersion_) {
+    if (catalogObject.getCatalog_version() > lastSyncedCatalogVersion_.get()) {
       catalogDeltaLog_.addRemovedObject(catalogObject);
     }
   }
@@ -525,10 +511,17 @@ public class ImpaladCatalog extends Catalog {
    * received and processed a valid catalog topic update from the StateStore),
    * false otherwise.
    */
-  public boolean isReady() { return isReady_.get(); }
+  public boolean isReady() {
+    return lastSyncedCatalogVersion_.get() > INITIAL_CATALOG_VERSION;
+  }
 
   // Only used for testing.
-  public void setIsReady(boolean isReady) { isReady_.set(isReady); }
+  public void setIsReady(boolean isReady) {
+    lastSyncedCatalogVersion_.incrementAndGet();
+    synchronized (catalogUpdateEventNotifier_) {
+      catalogUpdateEventNotifier_.notifyAll();
+    }
+  }
   public AuthorizationPolicy getAuthPolicy() { return authPolicy_; }
   public String getDefaultKuduMasterHosts() { return defaultKuduMasterHosts_; }
 
@@ -542,4 +535,5 @@ public class ImpaladCatalog extends Catalog {
       LOG.error("LibCacheRemoveEntry(" + hdfsLibFile + ") failed.");
     }
   }
+  public TUniqueId getCatalogServiceId() { return catalogServiceId_; }
 }

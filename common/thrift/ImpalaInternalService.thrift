@@ -115,7 +115,7 @@ struct TQueryOptions {
   24: optional bool disable_outermost_topn = 0
 
   // Time, in s, before a query will be timed out if it is inactive. May not exceed
-  // --idle_query_timeout if that flag > 0.
+  // --idle_query_timeout if that flag > 0. If 0, falls back to --idle_query_timeout.
   26: optional i32 query_timeout_s = 0
 
   // test hook to cap max memory for spilling operators (to force them to spill).
@@ -267,6 +267,11 @@ struct TQueryOptions {
   // Minimum number of bytes that will be scanned in COMPUTE STATS TABLESAMPLE,
   // regardless of the user-supplied sampling percent. Default value: 1GB
   62: optional i64 compute_stats_min_sample_size = 1073741824;
+
+  // Time limit, in s, before a query will be timed out after it starts executing. Does
+  // not include time spent in planning, scheduling or admission control. A value of 0
+  // means no time limit.
+  63: optional i32 exec_time_limit_s = 0;
 }
 
 // Impala currently has two types of sessions: Beeswax and HiveServer2
@@ -756,17 +761,17 @@ struct TPoolConfig {
 }
 
 struct TBloomFilter {
-  // Log_2 of the heap space required for this filter. See BloomFilter::BloomFilter() for
-  // details.
-  1: required i32 log_heap_space
+  // Log_2 of the bufferpool space required for this filter.
+  // See BloomFilter::BloomFilter() for details.
+  1: required i32 log_bufferpool_space
 
   // List of buckets representing the Bloom Filter contents, laid out contiguously in one
   // string for efficiency of (de)serialisation. See BloomFilter::Bucket and
   // BloomFilter::directory_.
   2: binary directory
 
-  // If always_true or always_false is true, 'directory' and 'log_heap_space' are not
-  // meaningful.
+  // If always_true or always_false is true, 'directory' and 'log_bufferpool_space' are
+  // not meaningful.
   3: required bool always_true
   4: required bool always_false
 }

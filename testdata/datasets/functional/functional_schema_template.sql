@@ -1721,11 +1721,28 @@ ALTER TABLE {table_name} ADD IF NOT EXISTS PARTITION(d6=1);
 ---- ROW_FORMAT
 delimited fields terminated by ','
 ---- LOAD
-`hadoop fs -mkdir -p /test-warehouse/decimal_tbl/d6=1 && hadoop fs -put -f \
-${IMPALA_HOME}/testdata/data/decimal_tbl.txt /test-warehouse/decimal_tbl/d6=1/
+LOAD DATA LOCAL INPATH '{impala_home}/testdata/data/decimal_tbl.txt'
+OVERWRITE INTO TABLE {db_name}{db_suffix}.{table_name} PARTITION(d6=1);
 ---- DEPENDENT_LOAD
 INSERT OVERWRITE TABLE {db_name}{db_suffix}.{table_name} partition(d6)
 select * from functional.{table_name};
+---- CREATE_KUDU
+DROP TABLE IF EXISTS {db_name}{db_suffix}.{table_name};
+CREATE TABLE {db_name}{db_suffix}.{table_name} (
+  d1 DECIMAL,
+  d2 DECIMAL(10, 0),
+  d3 DECIMAL(20, 10),
+  d4 DECIMAL(38, 38),
+  d5 DECIMAL(10, 5),
+  d6 DECIMAL(9, 0),
+  PRIMARY KEY (d1, d2, d3, d4, d5, d6)
+)
+PARTITION BY HASH PARTITIONS 3
+STORED AS KUDU;
+---- DEPENDENT_LOAD_KUDU
+INSERT into TABLE {db_name}{db_suffix}.{table_name}
+SELECT d1, d2, d3, d4, d5, d6
+FROM {db_name}.{table_name};
 ====
 ---- DATASET
 functional
@@ -1738,11 +1755,25 @@ c3 DECIMAL(1,1)
 ---- ROW_FORMAT
 delimited fields terminated by ','
 ---- LOAD
-`hadoop fs -mkdir -p /test-warehouse/decimal_tiny && hadoop fs -put -f \
-${IMPALA_HOME}/testdata/data/decimal-tiny.txt /test-warehouse/decimal_tiny/
+LOAD DATA LOCAL INPATH '{impala_home}/testdata/data/decimal-tiny.txt'
+OVERWRITE INTO TABLE {db_name}{db_suffix}.{table_name};
 ---- DEPENDENT_LOAD
 INSERT OVERWRITE TABLE {db_name}{db_suffix}.{table_name}
 select * from functional.{table_name};
+---- CREATE_KUDU
+DROP TABLE IF EXISTS {db_name}{db_suffix}.{table_name};
+CREATE TABLE {db_name}{db_suffix}.{table_name} (
+  c1 DECIMAL(10, 4),
+  c2 DECIMAL(15, 5),
+  c3 DECIMAL(1, 1),
+  PRIMARY KEY (c1, c2, c3)
+)
+PARTITION BY HASH PARTITIONS 3
+STORED AS KUDU;
+---- DEPENDENT_LOAD_KUDU
+INSERT into TABLE {db_name}{db_suffix}.{table_name}
+SELECT c1, c2, c3
+FROM {db_name}.{table_name};
 ====
 ---- DATASET
 functional

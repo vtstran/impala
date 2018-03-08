@@ -67,10 +67,9 @@
 #include "common/names.h"
 
 using boost::algorithm::join;
-using kudu::rpc::ServiceIf;
+using kudu::rpc::GeneratedServiceIf;
 using namespace strings;
 
-DEFINE_bool_hidden(use_statestore, true, "Deprecated, do not use");
 DEFINE_string(catalog_service_host, "localhost",
     "hostname where CatalogService is running");
 DEFINE_bool(enable_webserver, true, "If true, debug webserver is enabled");
@@ -81,14 +80,8 @@ DEFINE_int32(state_store_subscriber_port, 23000,
 DEFINE_int32(num_hdfs_worker_threads, 16,
     "(Advanced) The number of threads in the global HDFS operation pool");
 DEFINE_bool(disable_admission_control, false, "Disables admission control.");
-DEFINE_bool_hidden(use_krpc, false, "Used to indicate whether to use KRPC for the "
-    "DataStream subsystem, or the Thrift RPC layer instead. Defaults to false. "
-    "KRPC not yet supported");
-
-DEFINE_int32(datastream_service_queue_depth, 1024, "Size of datastream service queue");
-DEFINE_int32(datastream_service_num_svc_threads, 0, "Number of datastream service "
-    "processing threads. If left at default value 0, it will be set to number of CPU "
-    "cores.");
+DEFINE_bool(use_krpc, true, "If true, use KRPC for the DataStream subsystem. "
+    "Otherwise use Thrift RPC.");
 
 DECLARE_int32(state_store_port);
 DECLARE_int32(num_threads_per_core);
@@ -102,22 +95,6 @@ DECLARE_int64(min_buffer_size);
 DECLARE_bool(is_coordinator);
 DECLARE_int32(webserver_port);
 DECLARE_int64(tcmalloc_max_total_thread_cache_bytes);
-
-// TODO: Remove the following RM-related flags in Impala 3.0.
-DEFINE_bool_hidden(enable_rm, false, "Deprecated");
-DEFINE_int32_hidden(llama_callback_port, 28000, "Deprecated");
-DEFINE_string_hidden(llama_host, "", "Deprecated");
-DEFINE_int32_hidden(llama_port, 15000, "Deprecated");
-DEFINE_string_hidden(llama_addresses, "", "Deprecated");
-DEFINE_int64_hidden(llama_registration_timeout_secs, 30, "Deprecated");
-DEFINE_int64_hidden(llama_registration_wait_secs, 3, "Deprecated");
-DEFINE_int64_hidden(llama_max_request_attempts, 5, "Deprecated");
-DEFINE_string_hidden(cgroup_hierarchy_path, "", "Deprecated");
-DEFINE_string_hidden(staging_cgroup, "impala_staging", "Deprecated");
-DEFINE_int32_hidden(resource_broker_cnxn_attempts, 1, "Deprecated");
-DEFINE_int32_hidden(resource_broker_cnxn_retry_interval_ms, 3000, "Deprecated");
-DEFINE_int32_hidden(resource_broker_send_timeout, 0, "Deprecated");
-DEFINE_int32_hidden(resource_broker_recv_timeout, 0, "Deprecated");
 
 // TODO-MT: rename or retire
 DEFINE_int32(coordinator_rpc_threads, 12, "(Advanced) Number of threads available to "
@@ -174,12 +151,13 @@ ExecEnv::ExecEnv(const string& hostname, int backend_port, int krpc_port,
     frontend_(new Frontend()),
     async_rpc_pool_(new CallableThreadPool("rpc-pool", "async-rpc-sender", 8, 10000)),
     query_exec_mgr_(new QueryExecMgr()),
+    rpc_metrics_(metrics_->GetOrCreateChildGroup("rpc")),
     enable_webserver_(FLAGS_enable_webserver && webserver_port > 0),
     backend_address_(MakeNetworkAddress(hostname, backend_port)) {
 
   if (FLAGS_use_krpc) {
     VLOG_QUERY << "Using KRPC.";
-    // KRPC relies on resolved IP address. It's set in StartServices().
+    // KRPC relies on resolved IP address. It's set in Init().
     krpc_address_.__set_port(krpc_port);
     rpc_mgr_.reset(new RpcMgr(IsInternalTlsConfigured()));
     stream_mgr_.reset(new KrpcDataStreamMgr(metrics_.get()));
@@ -318,27 +296,15 @@ Status ExecEnv::Init() {
   obj_pool_->Add(new MemTracker(negated_unused_reservation, -1,
       "Buffer Pool: Unused Reservation", mem_tracker_.get()));
 
-  // Initialize the RPCMgr before allowing services registration.
+  // Initializes the RPCMgr and DataStreamServices.
   if (FLAGS_use_krpc) {
     krpc_address_.__set_hostname(ip_address_);
+    // Initialization needs to happen in the following order due to dependencies:
+    // - RPC manager, DataStreamService and DataStreamManager.
     RETURN_IF_ERROR(rpc_mgr_->Init());
-
-    // Add a MemTracker for memory used to store incoming calls before they handed over to
-    // the data stream manager.
-    MemTracker* data_svc_tracker = obj_pool_->Add(
-        new MemTracker(-1, "Data Stream Service", mem_tracker_.get()));
-
-    // Add a MemTracker for the data stream manager, which uses it to track memory used by
-    // deferred RPC calls while they are buffered in the data stream manager.
-    MemTracker* stream_mgr_tracker = obj_pool_->Add(
-        new MemTracker(-1, "Data Stream Queued RPC Calls", mem_tracker_.get()));
-    RETURN_IF_ERROR(KrpcStreamMgr()->Init(stream_mgr_tracker, data_svc_tracker));
-
-    unique_ptr<ServiceIf> data_svc(new DataStreamService(rpc_mgr_.get()));
-    int num_svc_threads = FLAGS_datastream_service_num_svc_threads > 0 ?
-        FLAGS_datastream_service_num_svc_threads : CpuInfo::num_cores();
-    RETURN_IF_ERROR(rpc_mgr_->RegisterService(num_svc_threads,
-        FLAGS_datastream_service_queue_depth, move(data_svc), data_svc_tracker));
+    data_svc_.reset(new DataStreamService());
+    RETURN_IF_ERROR(data_svc_->Init());
+    RETURN_IF_ERROR(KrpcStreamMgr()->Init(data_svc_->mem_tracker()));
     // Bump thread cache to 1GB to reduce contention for TCMalloc central
     // list's spinlock.
     if (FLAGS_tcmalloc_max_total_thread_cache_bytes == 0) {

@@ -19,10 +19,12 @@ import pytest
 from copy import copy
 
 from tests.beeswax.impala_beeswax import ImpalaBeeswaxException
+from tests.common.impala_cluster import ImpalaCluster
 from tests.common.impala_test_suite import ImpalaTestSuite
 from tests.common.skip import SkipIfLocal
 from tests.common.test_dimensions import create_single_exec_option_dimension
 from tests.common.test_vector import ImpalaTestDimension
+from tests.verifiers.metric_verifier import MetricVerifier
 
 # Substrings of the expected error messages when the mem limit is too low
 MEM_LIMIT_EXCEEDED_MSG = "Memory limit exceeded"
@@ -30,6 +32,7 @@ MEM_LIMIT_TOO_LOW_FOR_RESERVATION = ("minimum memory reservation is greater than
   "available to the query for buffer reservations")
 MEM_LIMIT_ERROR_MSGS = [MEM_LIMIT_EXCEEDED_MSG, MEM_LIMIT_TOO_LOW_FOR_RESERVATION]
 
+@SkipIfLocal.mem_usage_different
 class TestQueryMemLimitScaling(ImpalaTestSuite):
   """Test class to do functional validation of per query memory limits. """
   QUERY = ["select * from lineitem where l_orderkey = -1",
@@ -90,7 +93,6 @@ class TestExprMemUsage(ImpalaTestSuite):
       "select count(*) from lineitem where lower(l_comment) = 'hello'", exec_options,
       table_format=vector.get_value('table_format'))
 
-
 class TestLowMemoryLimits(ImpalaTestSuite):
   '''Super class for the memory limit tests with the TPC-H and TPC-DS queries'''
 
@@ -120,6 +122,7 @@ class TestLowMemoryLimits(ImpalaTestSuite):
         pytest.xfail(xfail_mem_limit)
 
 
+@SkipIfLocal.mem_usage_different
 class TestTpchMemLimitError(TestLowMemoryLimits):
   # The mem limits that will be used.
   MEM_IN_MB = [20, 140, 180, 220, 275, 450, 700]
@@ -177,7 +180,6 @@ class TestTpchMemLimitError(TestLowMemoryLimits):
     self.low_memory_limit_test(vector, 'tpch-q9', self.MIN_MEM_FOR_TPCH['Q9'],
             xfail_mem_limit="IMPALA-3328: TPC-H Q9 memory limit test is flaky")
 
-  @SkipIfLocal.mem_usage_different
   def test_low_mem_limit_q10(self, vector):
     self.low_memory_limit_test(vector, 'tpch-q10', self.MIN_MEM_FOR_TPCH['Q10'])
 
@@ -211,14 +213,22 @@ class TestTpchMemLimitError(TestLowMemoryLimits):
   def test_low_mem_limit_q20(self, vector):
     self.low_memory_limit_test(vector, 'tpch-q20', self.MIN_MEM_FOR_TPCH['Q20'])
 
-  @SkipIfLocal.mem_usage_different
   def test_low_mem_limit_q21(self, vector):
     self.low_memory_limit_test(vector, 'tpch-q21', self.MIN_MEM_FOR_TPCH['Q21'])
 
   def test_low_mem_limit_q22(self, vector):
     self.low_memory_limit_test(vector, 'tpch-q22', self.MIN_MEM_FOR_TPCH['Q22'])
 
+  @pytest.mark.execute_serially
+  def test_low_mem_limit_no_fragments(self, vector):
+    self.low_memory_limit_test(vector, 'tpch-q14', self.MIN_MEM_FOR_TPCH['Q14'])
+    self.low_memory_limit_test(vector, 'tpch-q18', self.MIN_MEM_FOR_TPCH['Q18'])
+    self.low_memory_limit_test(vector, 'tpch-q20', self.MIN_MEM_FOR_TPCH['Q20'])
+    for impalad in ImpalaCluster().impalads:
+      verifier = MetricVerifier(impalad.service)
+      verifier.wait_for_metric("impala-server.num-fragments-in-flight", 0)
 
+@SkipIfLocal.mem_usage_different
 class TestTpchPrimitivesMemLimitError(TestLowMemoryLimits):
   """
   Memory usage tests using targeted-perf queries to exercise specific operators.
@@ -264,6 +274,7 @@ class TestTpchPrimitivesMemLimitError(TestLowMemoryLimits):
     self.run_primitive_query(vector, 'primitive_orderby_all')
 
 
+@SkipIfLocal.mem_usage_different
 class TestTpcdsMemLimitError(TestLowMemoryLimits):
   # The mem limits that will be used.
   MEM_IN_MB = [20, 100, 116, 150]

@@ -25,11 +25,13 @@
 #include "kudu/rpc/rpc_context.h"
 
 #include "exec/kudu-util.h"
+#include "runtime/exec-env.h"
 #include "runtime/mem-tracker.h"
 #include "runtime/krpc-data-stream-recvr.h"
 #include "runtime/raw-value.inline.h"
 #include "runtime/row-batch.h"
 #include "runtime/runtime-state.h"
+#include "service/data-stream-service.h"
 #include "util/debug-util.h"
 #include "util/periodic-counter-updater.h"
 #include "util/runtime-profile-counters.h"
@@ -75,10 +77,12 @@ KrpcDataStreamMgr::KrpcDataStreamMgr(MetricGroup* metrics)
       "total-senders-timedout-waiting-for-recvr-creation", 0L);
 }
 
-Status KrpcDataStreamMgr::Init(MemTracker* mem_tracker,
-    MemTracker* incoming_request_tracker) {
-  mem_tracker_ = mem_tracker;
-  incoming_request_tracker_ = incoming_request_tracker;
+Status KrpcDataStreamMgr::Init(MemTracker* service_mem_tracker) {
+  // MemTracker for tracking memory used for buffering deferred RPC calls which
+  // arrive before the receiver is ready.
+  mem_tracker_.reset(new MemTracker(-1, "Data Stream Manager Deferred RPCs",
+      ExecEnv::GetInstance()->process_mem_tracker()));
+  service_mem_tracker_ = service_mem_tracker;
   RETURN_IF_ERROR(Thread::Create("krpc-data-stream-mgr", "maintenance",
       [this](){ this->Maintenance(); }, &maintenance_thread_));
   RETURN_IF_ERROR(deserialize_pool_.Init());
@@ -94,16 +98,17 @@ inline uint32_t KrpcDataStreamMgr::GetHashValue(
 }
 
 shared_ptr<DataStreamRecvrBase> KrpcDataStreamMgr::CreateRecvr(
-    RuntimeState* state, const RowDescriptor* row_desc,
-    const TUniqueId& finst_id, PlanNodeId dest_node_id, int num_senders,
-    int64_t buffer_size, RuntimeProfile* profile, bool is_merging) {
-
+    const RowDescriptor* row_desc, const TUniqueId& finst_id, PlanNodeId dest_node_id,
+    int num_senders, int64_t buffer_size, bool is_merging, RuntimeProfile* profile,
+    MemTracker* parent_tracker, BufferPool::ClientHandle* client) {
   DCHECK(profile != nullptr);
-  VLOG_FILE << "creating receiver for fragment="<< finst_id
+  DCHECK(parent_tracker != nullptr);
+  DCHECK(client != nullptr);
+  VLOG_FILE << "creating receiver for fragment_instance_id="<< finst_id
             << ", node=" << dest_node_id;
-  shared_ptr<KrpcDataStreamRecvr> recvr(
-      new KrpcDataStreamRecvr(this, state->instance_mem_tracker(), row_desc,
-          finst_id, dest_node_id, num_senders, is_merging, buffer_size, profile));
+  shared_ptr<KrpcDataStreamRecvr> recvr(new KrpcDataStreamRecvr(
+      this, parent_tracker, row_desc, finst_id, dest_node_id, num_senders, is_merging,
+      buffer_size, profile, client));
   uint32_t hash_value = GetHashValue(finst_id, dest_node_id);
   EarlySendersList early_senders_for_recvr;
   {
@@ -135,7 +140,8 @@ shared_ptr<DataStreamRecvrBase> KrpcDataStreamMgr::CreateRecvr(
   for (const unique_ptr<EndDataStreamCtx>& ctx :
       early_senders_for_recvr.closed_sender_ctxs) {
     recvr->RemoveSender(ctx->request->sender_id());
-    RespondAndReleaseRpc(Status::OK(), ctx->response, ctx->rpc_context, mem_tracker_);
+    DataStreamService::RespondAndReleaseRpc(Status::OK(), ctx->response, ctx->rpc_context,
+        mem_tracker_.get());
     num_senders_waiting_->Increment(-1);
   }
   return recvr;
@@ -167,10 +173,9 @@ shared_ptr<KrpcDataStreamRecvr> KrpcDataStreamMgr::FindRecvr(
 void KrpcDataStreamMgr::AddEarlySender(const TUniqueId& finst_id,
     const TransmitDataRequestPB* request, TransmitDataResponsePB* response,
     kudu::rpc::RpcContext* rpc_context) {
-  DCHECK_EQ(incoming_request_tracker_->parent(), mem_tracker_->parent());
-  incoming_request_tracker_->ReleaseLocal(
-      rpc_context->GetTransferSize(), mem_tracker_->parent());
-  mem_tracker_->ConsumeLocal(rpc_context->GetTransferSize(), mem_tracker_->parent());
+  const int64_t transfer_size = rpc_context->GetTransferSize();
+  mem_tracker_->Consume(transfer_size);
+  service_mem_tracker_->Release(transfer_size);
   RecvrId recvr_id = make_pair(finst_id, request->dest_node_id());
   auto payload = make_unique<TransmitDataCtx>(request, response, rpc_context);
   early_senders_map_[recvr_id].waiting_sender_ctxs.emplace_back(move(payload));
@@ -181,10 +186,9 @@ void KrpcDataStreamMgr::AddEarlySender(const TUniqueId& finst_id,
 void KrpcDataStreamMgr::AddEarlyClosedSender(const TUniqueId& finst_id,
     const EndDataStreamRequestPB* request, EndDataStreamResponsePB* response,
     kudu::rpc::RpcContext* rpc_context) {
-  DCHECK_EQ(incoming_request_tracker_->parent(), mem_tracker_->parent());
-  incoming_request_tracker_->ReleaseLocal(
-      rpc_context->GetTransferSize(), mem_tracker_->parent());
-  mem_tracker_->ConsumeLocal(rpc_context->GetTransferSize(), mem_tracker_->parent());
+  const int64_t transfer_size = rpc_context->GetTransferSize();
+  mem_tracker_->Consume(transfer_size);
+  service_mem_tracker_->Release(transfer_size);
   RecvrId recvr_id = make_pair(finst_id, request->dest_node_id());
   auto payload = make_unique<EndDataStreamCtx>(request, response, rpc_context);
   early_senders_map_[recvr_id].closed_sender_ctxs.emplace_back(move(payload));
@@ -198,7 +202,7 @@ void KrpcDataStreamMgr::AddData(const TransmitDataRequestPB* request,
   finst_id.__set_lo(request->dest_fragment_instance_id().lo());
   finst_id.__set_hi(request->dest_fragment_instance_id().hi());
   TPlanNodeId dest_node_id = request->dest_node_id();
-  VLOG_ROW << "AddData(): finst_id=" << PrintId(finst_id)
+  VLOG_ROW << "AddData(): fragment_instance_id=" << PrintId(finst_id)
            << " node_id=" << request->dest_node_id()
            << " #rows=" << request->row_batch_header().num_rows()
            << " sender_id=" << request->sender_id();
@@ -224,15 +228,15 @@ void KrpcDataStreamMgr::AddData(const TransmitDataRequestPB* request,
     // detect this case by checking already_unregistered - if true then the receiver was
     // already closed deliberately, and there's no unexpected error here.
     ErrorMsg msg(TErrorCode::DATASTREAM_RECVR_CLOSED, PrintId(finst_id), dest_node_id);
-    RespondAndReleaseRpc(Status::Expected(msg), response, rpc_context,
-        incoming_request_tracker_);
+    DataStreamService::RespondAndReleaseRpc(Status::Expected(msg), response, rpc_context,
+        service_mem_tracker_);
     return;
   }
   DCHECK(recvr != nullptr);
   int64_t transfer_size = rpc_context->GetTransferSize();
   recvr->AddBatch(request, response, rpc_context);
   // Release memory. The receiver already tracks it in its instance tracker.
-  incoming_request_tracker_->Release(transfer_size);
+  service_mem_tracker_->Release(transfer_size);
 }
 
 void KrpcDataStreamMgr::EnqueueDeserializeTask(const TUniqueId& finst_id,
@@ -259,7 +263,7 @@ void KrpcDataStreamMgr::CloseSender(const EndDataStreamRequestPB* request,
   TUniqueId finst_id;
   finst_id.__set_lo(request->dest_fragment_instance_id().lo());
   finst_id.__set_hi(request->dest_fragment_instance_id().hi());
-  VLOG_ROW << "CloseSender(): instance_id=" << PrintId(finst_id)
+  VLOG_ROW << "CloseSender(): fragment_instance_id=" << PrintId(finst_id)
            << " node_id=" << request->dest_node_id()
            << " sender_id=" << request->sender_id();
   shared_ptr<KrpcDataStreamRecvr> recvr;
@@ -280,28 +284,8 @@ void KrpcDataStreamMgr::CloseSender(const EndDataStreamRequestPB* request,
   // If we reach this point, either the receiver is found or it has been unregistered
   // already. In either cases, it's safe to just return an OK status.
   if (LIKELY(recvr != nullptr)) recvr->RemoveSender(request->sender_id());
-  RespondAndReleaseRpc(Status::OK(), response, rpc_context, incoming_request_tracker_);
-
-  {
-    // TODO: Move this to maintenance thread.
-    // Remove any closed streams that have been in the cache for more than
-    // STREAM_EXPIRATION_TIME_MS.
-    lock_guard<mutex> l(lock_);
-    ClosedStreamMap::iterator it = closed_stream_expirations_.begin();
-    int64_t now = MonotonicMillis();
-    int32_t before = closed_stream_cache_.size();
-    while (it != closed_stream_expirations_.end() && it->first < now) {
-      closed_stream_cache_.erase(it->second);
-      closed_stream_expirations_.erase(it++);
-    }
-    DCHECK_EQ(closed_stream_cache_.size(), closed_stream_expirations_.size());
-    int32_t after = closed_stream_cache_.size();
-    if (before != after) {
-      VLOG_QUERY << "Reduced stream ID cache from " << before << " items, to " << after
-                 << ", eviction took: "
-                 << PrettyPrinter::Print(MonotonicMillis() - now, TUnit::TIME_MS);
-    }
-  }
+  DataStreamService::RespondAndReleaseRpc(Status::OK(), response, rpc_context,
+      service_mem_tracker_);
 }
 
 Status KrpcDataStreamMgr::DeregisterRecvr(
@@ -337,7 +321,7 @@ Status KrpcDataStreamMgr::DeregisterRecvr(
 }
 
 void KrpcDataStreamMgr::Cancel(const TUniqueId& finst_id) {
-  VLOG_QUERY << "cancelling all streams for fragment=" << finst_id;
+  VLOG_QUERY << "cancelling all streams for fragment_instance_id=" << finst_id;
   lock_guard<mutex> l(lock_);
   FragmentRecvrSet::iterator iter =
       fragment_recvr_set_.lower_bound(make_pair(finst_id, 0));
@@ -348,8 +332,9 @@ void KrpcDataStreamMgr::Cancel(const TUniqueId& finst_id) {
       recvr->CancelStream();
     } else {
       // keep going but at least log it
-      LOG(ERROR) << Substitute("Cancel(): missing in stream_map: fragment=$0 node=$1",
-          PrintId(iter->first), iter->second);
+      LOG(ERROR) << Substitute(
+          "Cancel(): missing in stream_map: fragment_instance_id=$0 node=$1",
+              PrintId(iter->first), iter->second);
     }
     ++iter;
   }
@@ -365,28 +350,22 @@ void KrpcDataStreamMgr::RespondToTimedOutSender(const std::unique_ptr<ContextTyp
   ErrorMsg msg(TErrorCode::DATASTREAM_SENDER_TIMEOUT, remote_addr, PrintId(finst_id),
       ctx->request->dest_node_id());
   VLOG_QUERY << msg.msg();
-  RespondAndReleaseRpc(Status::Expected(msg), ctx->response, ctx->rpc_context,
-      mem_tracker_);
+  DataStreamService::RespondAndReleaseRpc(Status::Expected(msg), ctx->response,
+      ctx->rpc_context, mem_tracker_.get());
   num_senders_waiting_->Increment(-1);
   num_senders_timedout_->Increment(1);
 }
 
-template<typename ResponsePBType>
-void KrpcDataStreamMgr::RespondAndReleaseRpc(const Status& status,
-    ResponsePBType* response, kudu::rpc::RpcContext* ctx, MemTracker* mem_tracker) {
-  status.ToProto(response->mutable_status());
-  int64_t transfer_size = ctx->GetTransferSize();
-  ctx->RespondSuccess();
-  mem_tracker->Release(transfer_size);
-}
-
 void KrpcDataStreamMgr::Maintenance() {
+  const int32_t sleep_time_ms =
+      min(max(1, FLAGS_datastream_sender_timeout_ms / 2), 10000);
   while (true) {
+    const int64_t now = MonotonicMillis();
+
     // Notify any senders that have been waiting too long for their receiver to
     // appear. Keep lock_ held for only a short amount of time.
     vector<EarlySendersList> timed_out_senders;
     {
-      int64_t now = MonotonicMillis();
       lock_guard<mutex> l(lock_);
       auto it = early_senders_map_.begin();
       while (it != early_senders_map_.end()) {
@@ -411,9 +390,27 @@ void KrpcDataStreamMgr::Maintenance() {
         RespondToTimedOutSender<EndDataStreamCtx, EndDataStreamRequestPB>(ctx);
       }
     }
+
+    // Remove any closed streams that have been in the cache for more than
+    // STREAM_EXPIRATION_TIME_MS.
+    {
+      lock_guard<mutex> l(lock_);
+      ClosedStreamMap::iterator it = closed_stream_expirations_.begin();
+      int32_t before = closed_stream_cache_.size();
+      while (it != closed_stream_expirations_.end() && it->first < now) {
+        closed_stream_cache_.erase(it->second);
+        closed_stream_expirations_.erase(it++);
+      }
+      DCHECK_EQ(closed_stream_cache_.size(), closed_stream_expirations_.size());
+      int32_t after = closed_stream_cache_.size();
+      if (before != after) {
+        VLOG_QUERY << "Reduced stream ID cache from " << before << " items, to " << after
+                   << ", eviction took: "
+                   << PrettyPrinter::Print(MonotonicMillis() - now, TUnit::TIME_MS);
+      }
+    }
     bool timed_out = false;
-    // Wait for 10s
-    shutdown_promise_.Get(10000, &timed_out);
+    shutdown_promise_.Get(sleep_time_ms, &timed_out);
     if (!timed_out) return;
   }
 }
@@ -422,7 +419,7 @@ KrpcDataStreamMgr::~KrpcDataStreamMgr() {
   shutdown_promise_.Set(true);
   deserialize_pool_.Shutdown();
   LOG(INFO) << "Waiting for data-stream-mgr maintenance thread...";
-  maintenance_thread_->Join();
+  if (maintenance_thread_.get() != nullptr) maintenance_thread_->Join();
   LOG(INFO) << "Waiting for deserialization thread pool...";
   deserialize_pool_.Join();
 }

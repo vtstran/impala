@@ -388,6 +388,10 @@ class ImpalaShell(object, cmd.Cmd):
     not considered terminated. If no open quotation is found, it's considered
     terminated.
     """
+    # Strip any comments to make a statement such as the following be considered as
+    # ending with a delimiter:
+    # select 1 + 1; -- this is a comment
+    line = sqlparse.format(line, strip_comments=True).rstrip()
     if line.endswith(ImpalaShell.CMD_DELIM):
       try:
         # Look for an open quotation in the entire command, and not just the
@@ -1124,7 +1128,7 @@ class ImpalaShell(object, cmd.Cmd):
     is_dml = False
     tokens = list(lexer)
     if filter(self.DML_REGEX.match, tokens): is_dml = True
-    return self._execute_stmt(query, is_dml=is_dml)
+    return self._execute_stmt(query, is_dml=is_dml, print_web_link=True)
 
   def do_use(self, args):
     """Executes a USE... query"""

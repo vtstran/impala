@@ -72,7 +72,7 @@ fi
 # moving to a different build of the toolchain, e.g. when a version is bumped or a
 # compile option is changed. The build id can be found in the output of the toolchain
 # build jobs, it is constructed from the build number and toolchain git hash prefix.
-export IMPALA_TOOLCHAIN_BUILD_ID=39-a1bbd2851a
+export IMPALA_TOOLCHAIN_BUILD_ID=53-d95bb7f778
 # Versions of toolchain dependencies.
 # -----------------------------------
 export IMPALA_AVRO_VERSION=1.7.4-p4
@@ -158,11 +158,11 @@ if [[ $OSTYPE == "darwin"* ]]; then
 fi
 
 # Kudu version in the toolchain; provides libkudu_client.so and minicluster binaries.
-export IMPALA_KUDU_VERSION=1520b39
+export IMPALA_KUDU_VERSION=0eef8e0
 unset IMPALA_KUDU_URL
 
 # Kudu version used to identify Java client jar from maven
-export KUDU_JAVA_VERSION=1.6.0-cdh5.15.0-SNAPSHOT
+export KUDU_JAVA_VERSION=1.7.0-cdh5.15.0-SNAPSHOT
 
 # Versions of Hadoop ecosystem dependencies.
 # ------------------------------------------
@@ -272,7 +272,7 @@ if [[ -z "${KUDU_IS_SUPPORTED-}" ]]; then
       # Remove spaces, trim minor versions, and convert to lowercase.
       DISTRO_VERSION="$(tr -d ' \n' <<< "$DISTRO_VERSION" | cut -d. -f1 | tr "A-Z" "a-z")"
       case "$DISTRO_VERSION" in
-        centos6 | centos7 | debian7 | debian8 | suselinux12 | ubuntu* )
+        centos6 | centos7 | debian7 | debian8 | suselinux12 | suse12 | ubuntu* )
             KUDU_IS_SUPPORTED=true;;
       esac
     fi
@@ -414,12 +414,13 @@ export IMPALA_FE_TEST_COVERAGE_DIR="${IMPALA_FE_TEST_LOGS_DIR}/coverage"
 export IMPALA_BE_TEST_LOGS_DIR="${IMPALA_LOGS_DIR}/be_tests"
 export IMPALA_EE_TEST_LOGS_DIR="${IMPALA_LOGS_DIR}/ee_tests"
 export IMPALA_CUSTOM_CLUSTER_TEST_LOGS_DIR="${IMPALA_LOGS_DIR}/custom_cluster_tests"
+export IMPALA_MVN_LOGS_DIR="${IMPALA_LOGS_DIR}/mvn"
 # List of all Impala log dirs so they can be created by buildall.sh
 export IMPALA_ALL_LOGS_DIRS="${IMPALA_CLUSTER_LOGS_DIR}
   ${IMPALA_DATA_LOADING_LOGS_DIR} ${IMPALA_DATA_LOADING_SQL_DIR}
   ${IMPALA_FE_TEST_LOGS_DIR} ${IMPALA_FE_TEST_COVERAGE_DIR}
   ${IMPALA_BE_TEST_LOGS_DIR} ${IMPALA_EE_TEST_LOGS_DIR}
-  ${IMPALA_CUSTOM_CLUSTER_TEST_LOGS_DIR}"
+  ${IMPALA_CUSTOM_CLUSTER_TEST_LOGS_DIR} ${IMPALA_MVN_LOGS_DIR}"
 
 # Reduce the concurrency for local tests to half the number of cores in the system.
 CORES=$(($(getconf _NPROCESSORS_ONLN) / 2))

@@ -94,10 +94,7 @@ DEFINE_int32(max_free_io_buffers, 128,
 // uses about 6kB of memory. 20k file handles will thus reserve ~120MB of memory.
 // The actual amount of memory that is associated with a file handle can be larger
 // or smaller, depending on the replication factor for this file or the path name.
-// TODO: This is currently disabled due to HDFS-12528, which can disable short circuit
-// reads when file handle caching is enabled. This should be reenabled by default
-// when that issue is fixed.
-DEFINE_uint64(max_cached_file_handles, 0, "Maximum number of HDFS file handles "
+DEFINE_uint64(max_cached_file_handles, 20000, "Maximum number of HDFS file handles "
     "that will be cached. Disabled if set to 0.");
 
 // The unused file handle timeout specifies how long a file handle will remain in the
@@ -108,11 +105,12 @@ DEFINE_uint64(max_cached_file_handles, 0, "Maximum number of HDFS file handles "
 // If a file is deleted through HDFS, this open file descriptor can keep the disk space
 // from being freed. When the metadata sees that a file has been deleted, the file handle
 // will no longer be used by future queries. Aging out this file handle allows the
-// disk space to be freed in an appropriate period of time.
-// TODO: HDFS-12528 (which can disable short circuit reads) is more likely to happen
-// if file handles are cached for longer than 5 minutes. Use a conservative value for
-// the unused file handle cache timeout until HDFS-12528 is fixed.
-DEFINE_uint64(unused_file_handle_timeout_sec, 270, "Maximum time, in seconds, that an "
+// disk space to be freed in an appropriate period of time. The default value is
+// 6 hours. This was chosen to be less than a typical value for HDFS's fs.trash.interval.
+// This means that when files are deleted via the trash, the file handle cache will
+// have evicted the file handle before the files are flushed from the trash. This
+// means that the file handle cache won't impact available disk space.
+DEFINE_uint64(unused_file_handle_timeout_sec, 21600, "Maximum time, in seconds, that an "
     "unused HDFS file handle will remain in the file handle cache. Disabled if set "
     "to 0.");
 
@@ -397,6 +395,10 @@ void DiskIoMgr::CancelContext(RequestContext* context) {
 
 void DiskIoMgr::set_read_timer(RequestContext* r, RuntimeProfile::Counter* c) {
   r->read_timer_ = c;
+}
+
+void DiskIoMgr::set_open_file_timer(RequestContext* r, RuntimeProfile::Counter* c) {
+  r->open_file_timer_ = c;
 }
 
 void DiskIoMgr::set_bytes_read_counter(RequestContext* r, RuntimeProfile::Counter* c) {
@@ -1018,8 +1020,6 @@ void DiskIoMgr::ReadRange(
       int64_t disk_bit = 1LL << disk_queue->disk_id;
       reader->disks_accessed_bitmap_->BitOr(disk_bit);
     }
-    SCOPED_TIMER(&read_timer_);
-    SCOPED_TIMER(reader->read_timer_);
 
     buffer_desc->status_ = range->Read(buffer_desc->buffer_, buffer_desc->buffer_len_,
         &buffer_desc->len_, &buffer_desc->eosr_);
@@ -1182,6 +1182,7 @@ int DiskIoMgr::AssignQueue(const char* file, int disk_id, bool expected_local) {
 
 ExclusiveHdfsFileHandle* DiskIoMgr::GetExclusiveHdfsFileHandle(const hdfsFS& fs,
     std::string* fname, int64_t mtime, RequestContext *reader) {
+  SCOPED_TIMER(reader->open_file_timer_);
   ExclusiveHdfsFileHandle* fid = new ExclusiveHdfsFileHandle(fs, fname->data(), mtime);
   if (!fid->ok()) {
     VLOG_FILE << "Opening the file " << fname << " failed.";
@@ -1205,6 +1206,7 @@ void DiskIoMgr::ReleaseExclusiveHdfsFileHandle(ExclusiveHdfsFileHandle* fid) {
 CachedHdfsFileHandle* DiskIoMgr::GetCachedHdfsFileHandle(const hdfsFS& fs,
     std::string* fname, int64_t mtime, RequestContext *reader) {
   bool cache_hit;
+  SCOPED_TIMER(reader->open_file_timer_);
   CachedHdfsFileHandle* fh = file_handle_cache_.GetFileHandle(fs, fname, mtime, false,
       &cache_hit);
   if (fh == nullptr) return nullptr;
@@ -1228,8 +1230,10 @@ void DiskIoMgr::ReleaseCachedHdfsFileHandle(std::string* fname,
 }
 
 Status DiskIoMgr::ReopenCachedHdfsFileHandle(const hdfsFS& fs, std::string* fname,
-    int64_t mtime, CachedHdfsFileHandle** fid) {
+    int64_t mtime, RequestContext* reader, CachedHdfsFileHandle** fid) {
   bool cache_hit;
+  SCOPED_TIMER(reader->open_file_timer_);
+  ImpaladMetrics::IO_MGR_CACHED_FILE_HANDLES_REOPENED->Increment(1L);
   file_handle_cache_.ReleaseFileHandle(fname, *fid, true);
   // The old handle has been destroyed, so *fid must be overwritten before returning.
   *fid = file_handle_cache_.GetFileHandle(fs, fname, mtime, true,

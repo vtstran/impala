@@ -20,6 +20,9 @@
 
 #include "gen-cpp/data_stream_service.service.h"
 
+#include "common/status.h"
+#include "runtime/mem-tracker.h"
+
 namespace kudu {
 namespace rpc {
 class RpcContext;
@@ -37,7 +40,11 @@ class RpcMgr;
 /// appropriate receivers.
 class DataStreamService : public DataStreamServiceIf {
  public:
-  DataStreamService(RpcMgr* rpc_mgr);
+  DataStreamService();
+
+  /// Initializes the service by registering it with the singleton RPC manager.
+  /// This mustn't be called until RPC manager has been initialized.
+  Status Init();
 
   /// Notifies the receiver to close the data stream specified in 'request'.
   /// The receiver replies to the client with a status serialized in 'response'.
@@ -48,6 +55,18 @@ class DataStreamService : public DataStreamServiceIf {
   /// The receiver replies to the client with a status serialized in 'response'.
   virtual void TransmitData(const TransmitDataRequestPB* request,
       TransmitDataResponsePB* response, kudu::rpc::RpcContext* context);
+
+  /// Respond to a RPC passed in 'response'/'ctx' with 'status' and release
+  /// the payload memory from 'mem_tracker'. Takes ownership of 'ctx'.
+  template<typename ResponsePBType>
+  static void RespondAndReleaseRpc(const Status& status, ResponsePBType* response,
+      kudu::rpc::RpcContext* ctx, MemTracker* mem_tracker);
+
+  MemTracker* mem_tracker() { return mem_tracker_.get(); }
+
+ private:
+  /// Tracks the memory usage of the payloads in the service queue.
+  std::unique_ptr<MemTracker> mem_tracker_;
 };
 
 } // namespace impala
