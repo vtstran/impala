@@ -212,7 +212,9 @@ void ImpalaHttpHandler::CancelQueryHandler(const Webserver::WebRequest& req,
     document->AddMember("error", error, document->GetAllocator());
     return;
   }
-  Status cause("Cancelled from Impala's debug web interface");
+  stringstream c;
+  c << "Cancelled from Impala's debug web interface by client at " << req.src_sock;
+  Status cause(c.str().c_str());
   // Web UI doesn't have access to secret so we can't validate it. We assume that
   // web UI is allowed to close queries.
   status = server_->UnregisterQuery(unique_id, true, &cause);
@@ -234,7 +236,9 @@ void ImpalaHttpHandler::CloseSessionHandler(const Webserver::WebRequest& req,
     document->AddMember("error", error, document->GetAllocator());
     return;
   }
-  Status cause("Session closed from Impala's debug web interface");
+  stringstream c;
+  c << "Session closed from Impala's debug web interface by client at " << req.src_sock;
+  Status cause(c.str().c_str());
   // Web UI doesn't have access to secret so we can't validate it. We assume that
   // web UI is allowed to close sessions.
   status = server_->CloseSessionInternal(unique_id,

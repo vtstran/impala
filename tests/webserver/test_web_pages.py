@@ -726,3 +726,30 @@ class TestWebPage(ImpalaTestSuite):
     self.get_and_check_status(self.ROOT_URL,
         "href='http://.*:%s/'" % self.IMPALAD_TEST_PORT[0], self.IMPALAD_TEST_PORT,
         regex=True, headers={'X-Forwarded-Context': '/gateway'})
+
+  def test_displaying_src_in_query_status(self):
+    # Execute a long running query then cancel it from the WebUI.
+    # Check the runtime profile and the INFO logs for the cause message.
+    query = "select sleep(10000000)"
+    query_id = self.execute_query_async(query).get_handle().id
+    cancel_query_url = "{0}cancel_query?query_id={1}".format(self.ROOT_URL.format
+      ("25000"), query_id)
+    text_profile_url = "{0}query_profile_plain_text?query_id={1}".format(self.ROOT_URL
+      .format("25000"), query_id)
+    requests.get(cancel_query_url)
+    response = requests.get(text_profile_url)
+    cancel_status = "Cancelled from Impala&apos;s debug web interface by client at"
+    assert cancel_status in response.text
+    #self.impala_log_dir = os.getenv('IMPALA_CLUSTER_LOGS_DIR')
+    self.assert_impalad_log_contains("INFO", "Cancelled from Impala\'s debug web "
+      "interface by client at")
+    
+    # Session closing from the WebUI does not produce the cause message in the profile,
+    # so we will skip checking the runtime profile
+    results = self.execute_query("select current_session()")
+    session_id = results.data[0]
+    close_session_url = "{0}close_session?session_id={1}".format(self.ROOT_URL.format
+      ("25000"), session_id)
+    requests.get(close_session_url)
+    self.assert_impalad_log_contains("INFO", "Session closed from Impala\'s debug "
+      "web interface by client at")

@@ -61,6 +61,9 @@ class WebCallbackRegistry {
 
     // In the case of a POST, the posted data.
     std::string post_data;
+
+    // Socket address of the source of the request
+    std::string src_sock;
   };
 
   typedef std::unordered_map<std::string, std::string> HttpResponseHeaders;
